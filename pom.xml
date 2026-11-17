@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.xulihang</groupId>
+  <artifactId>mrc4j</artifactId>
+  <version>1.0.0-SNAPSHOT</version>
+
+  <name>mrc4j</name>
+  <description>A Java library that splits scanned pages into crisp 1-bit ink line art and compressed color plates to build small, sharp, MRC-style PDFs.</description>
+  <url>https://github.com/xulihang/mrc4j</url>
+
+  <licenses>
+    <license>
+      <name>Apache License, Version 2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+    </license>
+  </licenses>
+
+  <developers>
+    <developer>
+      <id>xulihang</id>
+      <url>https://github.com/xulihang</url>
+    </developer>
+  </developers>
+
+  <scm>
+    <connection>scm:git:https://github.com/xulihang/mrc4j.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/xulihang/mrc4j.git</developerConnection>
+    <url>https://github.com/xulihang/mrc4j</url>
+  </scm>
+
+  <properties>
+    <maven.compiler.source>11</maven.compiler.source>
+    <maven.compiler.target>11</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <dependencies>
+    <!-- PDF assembly -->
+    <dependency>
+      <groupId>org.apache.pdfbox</groupId>
+      <artifactId>pdfbox</artifactId>
+      <version>2.0.31</version>
+    </dependency>
+    <!-- JPEG 2000 encoding/decoding for the color plates -->
+    <dependency>
+      <groupId>com.github.jai-imageio</groupId>
+      <artifactId>jai-imageio-jpeg2000</artifactId>
+      <version>1.4.0</version>
+    </dependency>
+    <!-- OpenCV (same binding used by xulihang/lama4j) -->
+    <dependency>
+      <groupId>org.openpnp</groupId>
+      <artifactId>opencv</artifactId>
+      <version>4.9.0-0</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.8.1</version>
+      </plugin>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.0.0</version>
+      </plugin>
+    </plugins>
+  </build>
+</project>
