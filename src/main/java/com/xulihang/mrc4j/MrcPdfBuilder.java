@@ -62,6 +62,8 @@ public final class MrcPdfBuilder implements AutoCloseable {
         public double thresholdC = 10.0;
         /** Median blur kernel used to build the background plate (odd). */
         public int backgroundBlurKernel = 9;
+        /** Morphological opening kernel applied to the ink mask; 0 disables it. */
+        public int maskOpenKernel = 3;
         /** Mask dilation in pixels when clearing ink from the background plate. */
         public int backgroundClearDilation = 3;
         /** JPEG 2000 target rate for the background plate, bits per pixel. */
@@ -210,6 +212,15 @@ public final class MrcPdfBuilder implements AutoCloseable {
             Imgproc.adaptiveThreshold(gray, mask, 255,
                     Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C, Imgproc.THRESH_BINARY_INV,
                     options.thresholdBlockSize, options.thresholdC);
+
+            if (options.maskOpenKernel >= 2) {
+                Mat opened = new Mat();
+                Mat openKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT,
+                        new Size(options.maskOpenKernel, options.maskOpenKernel));
+                Imgproc.morphologyEx(mask, opened, Imgproc.MORPH_OPEN, openKernel);
+                opened.copyTo(mask);
+                opened.release();
+            }
 
             Mat kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT,
                     new Size(options.backgroundClearDilation, options.backgroundClearDilation));
@@ -363,6 +374,10 @@ public final class MrcPdfBuilder implements AutoCloseable {
         }
         if (options.backgroundBlurKernel < 3 || options.backgroundBlurKernel % 2 == 0) {
             throw new IllegalArgumentException("backgroundBlurKernel must be an odd number >= 3");
+        }
+        if (options.maskOpenKernel != 0
+                && (options.maskOpenKernel < 3 || options.maskOpenKernel % 2 == 0)) {
+            throw new IllegalArgumentException("maskOpenKernel must be 0 or an odd number >= 3");
         }
         if (options.backgroundBitsPerPixel <= 0 || options.foregroundBitsPerPixel <= 0) {
             throw new IllegalArgumentException("JPEG 2000 rates must be > 0");

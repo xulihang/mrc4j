@@ -61,6 +61,7 @@ mvn compile exec:java -Dexec.mainClass=com.xulihang.mrc4j.MrcPdfFromImages \
 | `thresholdBlockSize` | 31 | Adaptive threshold window (odd pixels) |
 | `thresholdC` | 10.0 | Adaptive threshold constant |
 | `backgroundBlurKernel` | 9 | Median blur used to fill ink areas in the background plate |
+| `maskOpenKernel` | 3 | Morphological opening kernel for the ink mask; 0 disables it |
 | `backgroundClearDilation` | 3 | Mask dilation when clearing ink from the background |
 | `backgroundBitsPerPixel` | 0.4 | JPEG 2000 rate for the background plate |
 | `foregroundBitsPerPixel` | 0.3 | JPEG 2000 rate for the foreground plate |
