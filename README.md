@@ -101,6 +101,11 @@ original text pixels selected by the mask become a lossless JPEG 2000 foreground
 as its G4 soft mask, and the background can be compressed much harder without ever blurring
 text. `textMaskDilation` (default 1) widens the mask slightly to include antialiased edges.
 
+Add `bgLossless=1` for a bit-exact page: the background is stored as lossless JPEG 2000, the
+text foreground is lossless, and the coverage mask is extended by every pixel that differs
+between the original and the text-removed image. The reconstructed page is then pixel-identical
+to the source (the file is naturally much larger than the lossy textmask output).
+
 ## Options
 
 Positional arguments remain `sourcePdf`, `dpi`, `bgBpp`, `fgBpp`; anything of the form
@@ -112,6 +117,7 @@ Positional arguments remain `sourcePdf`, `dpi`, `bgBpp`, `fgBpp`; anything of th
 | `intermediate` | — | ImageTrans intermediate directory for `mode=textmask` |
 | `textMaskDilation` | 1 | Mask dilation in pixels for `mode=textmask` |
 | `textFgBpp` | 0.2 | Text foreground JPX rate; the smaller of lossless and this rate is kept (0 = lossless only) |
+| `bgLossless` | false | `mode=textmask`: lossless background + lossless text fg (bit-exact; requires `bgScale=1`) |
 | `thresholdBlockSize` / `blockSize` | 31 | Adaptive threshold window (odd pixels) |
 | `thresholdC` | 10.0 | Adaptive threshold constant |
 | `backgroundBlurKernel` / `bgBlur` | 9 | Median blur used to fill ink areas in the background plate |

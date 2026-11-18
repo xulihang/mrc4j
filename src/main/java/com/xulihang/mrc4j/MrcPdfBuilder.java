@@ -35,7 +35,9 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 import java.util.zip.Deflater;
 import java.util.zip.DeflaterOutputStream;
 
@@ -149,6 +151,13 @@ public final class MrcPdfBuilder implements AutoCloseable {
          * with the rate, sparse pages with lossless.
          */
         public double textForegroundBitsPerPixel = 0.2;
+        /**
+         * Encode the text-mask background losslessly (full-resolution lossless
+         * JPEG 2000). The text coverage mask is extended by any pixel that
+         * differs between the original and the text-removed image, so the
+         * reconstructed page is bit-exact. Requires {@code backgroundScale=1}.
+         */
+        public boolean backgroundLossless = false;
 
         public Options() {
         }
@@ -355,6 +364,7 @@ public final class MrcPdfBuilder implements AutoCloseable {
 
         Mat textMask = textMaskToMat(textMaskImage);
         Mat mask = new Mat();
+        Mat original = null;
         try {
             if (options.textMaskDilation > 0) {
                 int k = options.textMaskDilation * 2 + 1;
@@ -367,13 +377,30 @@ public final class MrcPdfBuilder implements AutoCloseable {
             } else {
                 textMask.copyTo(mask);
             }
+
+            PDImageXObject background;
+            if (options.backgroundLossless) {
+                // Cover every pixel where removing the text changed the image,
+                // so the foreground restores the original exactly.
+                original = toBgrMat(toBgr(image));
+                Mat bgPixels = toBgrMat(toBgr(textRemoved));
+                try {
+                    addDifferenceToMask(original, bgPixels, mask);
+                } finally {
+                    bgPixels.release();
+                }
+                background = encodeLosslessBackground(textRemoved);
+            } else {
+                background = encodeTextBackground(textRemoved);
+            }
+
             int textPixels = Core.countNonZero(mask);
             byte[] packedMask = packMask(mask);
             PDImageXObject softMask = encodeMask(packedMask, w, h, false);
 
-            PDImageXObject background = encodeTextBackground(textRemoved);
-
-            Mat original = toBgrMat(toBgr(image));
+            if (original == null) {
+                original = toBgrMat(toBgr(image));
+            }
             Mat foreground = original.clone();
             Mat inverse = new Mat();
             try {
@@ -381,7 +408,7 @@ public final class MrcPdfBuilder implements AutoCloseable {
                 foreground.setTo(new Scalar(0, 0, 0), inverse);
                 BufferedImage foregroundImageBitmap = toBufferedImage(foreground);
                 byte[] foregroundJpx = encodeJpxLossless(foregroundImageBitmap);
-                if (options.textForegroundBitsPerPixel > 0) {
+                if (!options.backgroundLossless && options.textForegroundBitsPerPixel > 0) {
                     byte[] lossy = encodeJpx(foregroundImageBitmap,
                             options.textForegroundBitsPerPixel);
                     if (lossy.length < foregroundJpx.length) {
@@ -405,14 +432,47 @@ public final class MrcPdfBuilder implements AutoCloseable {
                 return new TextMaskStats(background.getCOSObject().getLength(),
                         foregroundJpx.length, softMask.getCOSObject().getLength(), textPixels);
             } finally {
-                original.release();
                 foreground.release();
                 inverse.release();
             }
         } finally {
+            if (original != null) {
+                original.release();
+            }
             textMask.release();
             mask.release();
         }
+    }
+
+    /** Extends the mask with every pixel where the two images differ. */
+    private static void addDifferenceToMask(Mat a, Mat b, Mat mask) {
+        Mat diff = new Mat();
+        Mat merged = new Mat();
+        try {
+            Core.absdiff(a, b, diff);
+            List<Mat> channels = new ArrayList<>();
+            Core.split(diff, channels);
+            try {
+                Core.bitwise_or(channels.get(0), channels.get(1), merged);
+                Core.bitwise_or(merged, channels.get(2), merged);
+            } finally {
+                for (Mat channel : channels) {
+                    channel.release();
+                }
+            }
+            Imgproc.threshold(merged, merged, 0, 255, Imgproc.THRESH_BINARY);
+            Core.bitwise_or(mask, merged, mask);
+        } finally {
+            diff.release();
+            merged.release();
+        }
+    }
+
+    private PDImageXObject encodeLosslessBackground(BufferedImage textRemoved) throws IOException {
+        BufferedImage bg = toBgr(textRemoved);
+        byte[] jpx = encodeJpxLossless(bg);
+        return imageXObject(jpx, COSName.JPX_DECODE, null,
+                bg.getWidth(), bg.getHeight(), COSName.DEVICERGB, 8, false);
     }
 
     private PDImageXObject encodeTextBackground(BufferedImage textRemoved) throws IOException {
@@ -949,6 +1009,9 @@ public final class MrcPdfBuilder implements AutoCloseable {
         }
         if (options.textForegroundBitsPerPixel < 0) {
             throw new IllegalArgumentException("textForegroundBitsPerPixel must be >= 0");
+        }
+        if (options.backgroundLossless && options.backgroundScale > 1.0) {
+            throw new IllegalArgumentException("backgroundLossless requires backgroundScale=1");
         }
     }
 }

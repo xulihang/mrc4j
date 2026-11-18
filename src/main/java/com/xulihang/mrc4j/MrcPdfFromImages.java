@@ -32,7 +32,8 @@ import java.util.stream.Stream;
  * {@code fgQuality=0.7}, {@code mask=g4|flate}, {@code fgMode=auto|image|stencil},
  * {@code stencilSat=24}, {@code stencilVal=110}, {@code blockSize=31},
  * {@code thresholdC=10}, {@code bgBlur=9}, {@code maskOpen=3},
- * {@code clearDilation=3}, {@code textMaskDilation=1}, {@code textFgBpp=0}.</p>
+ * {@code clearDilation=3}, {@code textMaskDilation=1}, {@code textFgBpp=0.2},
+ * {@code bgLossless=0|1}.</p>
  *
  * <p>{@code mode=textmask} reads ImageTrans intermediates named
  * {@code <image>-mask.png} and {@code <image>-text-removed.png} from
@@ -129,13 +130,16 @@ public final class MrcPdfFromImages {
         if (mode == Mode.LOSSLESS) {
             System.out.println("mode: lossless JPEG 2000, full resolution, bit-exact");
         } else if (mode == Mode.TEXTMASK) {
-            System.out.printf(Locale.ROOT,
-                    "mode: textmask (bg=%s scale %.2f %s, text fg lossless JPX, mask=%s, dilation %d)%n",
-                    options.backgroundFormat, options.backgroundScale,
-                    options.backgroundFormat == MrcPdfBuilder.PlateFormat.JPEG
+            String bgDetail = options.backgroundLossless ? "lossless"
+                    : options.backgroundFormat == MrcPdfBuilder.PlateFormat.JPEG
                             ? "q=" + options.backgroundJpegQuality
-                            : "bpp=" + options.backgroundBitsPerPixel,
-                    options.maskEncoding, options.textMaskDilation);
+                            : "bpp=" + options.backgroundBitsPerPixel;
+            String fgDetail = options.backgroundLossless ? "lossless"
+                    : "lossless/" + options.textForegroundBitsPerPixel + "bpp";
+            System.out.printf(Locale.ROOT,
+                    "mode: textmask (bg=%s scale %.2f %s, text fg %s, mask=%s, dilation %d)%n",
+                    options.backgroundFormat, options.backgroundScale, bgDetail,
+                    fgDetail, options.maskEncoding, options.textMaskDilation);
         } else {
             System.out.printf(Locale.ROOT,
                     "compress: bg=%s(scale %.2f, %s) fg=%s(%s) mask=%s ink=%s%n",
@@ -274,6 +278,9 @@ public final class MrcPdfFromImages {
             case "textfgbpp":
                 options.textForegroundBitsPerPixel = Double.parseDouble(value);
                 break;
+            case "bglossless":
+                options.backgroundLossless = parseBoolean(value);
+                break;
             case "fgmode":
                 options.inkMode = parseInkMode(value);
                 break;
@@ -344,6 +351,23 @@ public final class MrcPdfFromImages {
         }
     }
 
+    private static boolean parseBoolean(String value) {
+        switch (value.toLowerCase(Locale.ROOT)) {
+            case "1":
+            case "true":
+            case "yes":
+            case "on":
+                return true;
+            case "0":
+            case "false":
+            case "no":
+            case "off":
+                return false;
+            default:
+                throw new IllegalArgumentException("Expected boolean, got: " + value);
+        }
+    }
+
     private static void printUsage() {
         System.err.println("Usage: MrcPdfFromImages <imagesDir> <outPdf> [sourcePdf|-] [dpi=300] [bgBpp=0.4] [fgBpp=0.05] [key=value...]");
         System.err.println("Options: mode=mrc|lossless|textmask (lossless = one full-res lossless JPX per page)");
@@ -351,6 +375,7 @@ public final class MrcPdfFromImages {
         System.err.println("         bgFormat=jpeg|jpx bgScale=2 bgQuality=0.6 fgFormat=jpx|jpeg");
         System.err.println("         fgQuality=0.7 fgBpp=0.05 mask=g4|flate fgMode=auto|image|stencil");
         System.err.println("         textMaskDilation=1 textFgBpp=0.2 (0 = lossless)");
+        System.err.println("         bgLossless=1 (bit-exact textmask output, bgScale must be 1)");
         System.err.println("         stencilSat=24 stencilVal=110 blockSize=31 thresholdC=10");
         System.err.println("         bgBlur=9 maskOpen=3 clearDilation=3");
     }
