@@ -66,6 +66,41 @@ mvn compile exec:java -Dexec.mainClass=com.xulihang.mrc4j.MrcPdfFromImages \
   -Dexec.args="pages out.pdf - 300 bgFormat=jpeg fgFormat=jpeg fgQuality=0.5"
 ```
 
+### Lossless mode
+
+Add `mode=lossless` to store every page as one full-resolution lossless JPEG 2000 image,
+with no downsampling and no MRC split. The result is bit-exact: decoding the page returns the
+source pixels unchanged.
+
+```bash
+mvn compile exec:java -Dexec.mainClass=com.xulihang.mrc4j.MrcPdfFromImages \
+  -Dexec.args="pages out.pdf - 300 mode=lossless"
+```
+
+Lossless JPX is typically 40–60% smaller than the source PNGs and needs a JPEG 2000 decoder
+in the viewer. MRC mode (the default) is still much smaller and is intended for viewing.
+
+### Text-mask mode (ImageTrans intermediates)
+
+If you have [ImageTrans](https://www.basiccat.org/imagetrans/) intermediates for the pages, mrc4j
+can use them to keep text perfectly crisp while compressing the background hard. For every
+`page-001.png`, put these two files in an intermediate directory:
+
+- `page-001.png-mask.png` — text pixel mask (opaque text pixels, transparent elsewhere);
+- `page-001.png-text-removed.png` — the page with text removed/inpainted.
+
+Then run:
+
+```bash
+mvn compile exec:java -Dexec.mainClass=com.xulihang.mrc4j.MrcPdfFromImages \
+  -Dexec.args="pages out.pdf - 300 mode=textmask intermediate=path/to/intermediateResults bgBpp=0.4"
+```
+
+The text-free image becomes the background plate (full resolution, JPEG 2000 by default), the
+original text pixels selected by the mask become a lossless JPEG 2000 foreground with the mask
+as its G4 soft mask, and the background can be compressed much harder without ever blurring
+text. `textMaskDilation` (default 1) widens the mask slightly to include antialiased edges.
+
 ## Options
 
 Positional arguments remain `sourcePdf`, `dpi`, `bgBpp`, `fgBpp`; anything of the form
@@ -73,6 +108,10 @@ Positional arguments remain `sourcePdf`, `dpi`, `bgBpp`, `fgBpp`; anything of th
 
 | Option | Default | Meaning |
 |---|---|---|
+| `mode` | `mrc` | `mrc` (layered, lossy), `lossless` (one full-res lossless JPX per page), or `textmask` |
+| `intermediate` | — | ImageTrans intermediate directory for `mode=textmask` |
+| `textMaskDilation` | 1 | Mask dilation in pixels for `mode=textmask` |
+| `textFgBpp` | 0.2 | Text foreground JPX rate; the smaller of lossless and this rate is kept (0 = lossless only) |
 | `thresholdBlockSize` / `blockSize` | 31 | Adaptive threshold window (odd pixels) |
 | `thresholdC` | 10.0 | Adaptive threshold constant |
 | `backgroundBlurKernel` / `bgBlur` | 9 | Median blur used to fill ink areas in the background plate |
