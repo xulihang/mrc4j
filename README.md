@@ -4,12 +4,13 @@ A Java library for building compact MRC (Mixed Raster Content) PDFs with crisp l
 
 Instead of flattening a scanned page into one big color image, mrc4j splits it into three layers:
 
-- **background plate** — the page colors, with ink removed, saved as JPEG 2000;
-- **foreground plate** — the inked pixels, saved as JPEG 2000;
-- **1-bit mask** — the ink footprint, stored losslessly, used as the foreground's soft mask.
+- **background plate** — the page colors, with ink removed, downsampled and stored as JPEG by default;
+- **foreground plate** — the inked pixels, stored as JPEG 2000 (or JPEG);
+- **1-bit mask** — the ink footprint, stored as CCITT Group 4, used as the foreground's soft mask.
 
 Binary line art keeps hard edges at every zoom level, while the color plates can be compressed
-aggressively — a common technique in scan-to-PDF pipelines.
+aggressively — a common technique in scan-to-PDF pipelines. The layer split, G4 stencils and JPEG
+background follow the approach of [ifad/pdfbeads](https://github.com/ifad/pdfbeads).
 
 ## Requirements
 
@@ -24,8 +25,11 @@ aggressively — a common technique in scan-to-PDF pipelines.
 import com.xulihang.mrc4j.MrcPdfBuilder;
 
 MrcPdfBuilder.Options options = new MrcPdfBuilder.Options();
-options.backgroundBitsPerPixel = 0.4; // color plate rate
-options.foregroundBitsPerPixel = 0.3;
+options.backgroundScale = 2.0;                 // half-resolution color plate
+options.backgroundJpegQuality = 0.6f;
+options.foregroundBitsPerPixel = 0.05;         // foreground only shows through the mask
+options.maskEncoding = MrcPdfBuilder.MaskEncoding.CCITT_G4;
+options.inkMode = MrcPdfBuilder.InkMode.AUTO;  // black ink needs no foreground plate
 
 try (MrcPdfBuilder builder = new MrcPdfBuilder(options)) {
     builder.addPage(Path.of("page-001.png"), 460.8f, 708.2f); // page size in PDF points
@@ -34,6 +38,7 @@ try (MrcPdfBuilder builder = new MrcPdfBuilder(options)) {
 }
 ```
 
+`addPage` returns the extracted `PageLayers` (including ink ratio and mean ink color), and
 `MrcPdfBuilder.extractLayers(image, options)` exposes the three layers if you want to inspect
 or re-encode them yourself.
 
@@ -41,40 +46,72 @@ or re-encode them yourself.
 
 ```bash
 mvn compile exec:java -Dexec.mainClass=com.xulihang.mrc4j.MrcPdfFromImages \
-  -Dexec.args="<imagesDir> <outPdf> [sourcePdf|-] [dpi=300] [bgBpp=0.4] [fgBpp=0.3]"
+  -Dexec.args="<imagesDir> <outPdf> [sourcePdf|-] [dpi=300] [bgBpp=0.4] [fgBpp=0.05] [key=value...]"
 ```
 
 When `sourcePdf` is given, page sizes are copied from that PDF exactly; otherwise they are
 derived from the image pixels and the DPI.
 
-Example:
+Example (defaults, suitable for scans and comics):
 
 ```bash
 mvn compile exec:java -Dexec.mainClass=com.xulihang.mrc4j.MrcPdfFromImages \
-  -Dexec.args="pages out.pdf source.pdf 300 0.4 0.3"
+  -Dexec.args="pages out.pdf - 300"
+```
+
+Maximum-compatibility variant for viewers without a JPEG 2000 decoder (larger file):
+
+```bash
+mvn compile exec:java -Dexec.mainClass=com.xulihang.mrc4j.MrcPdfFromImages \
+  -Dexec.args="pages out.pdf - 300 bgFormat=jpeg fgFormat=jpeg fgQuality=0.5"
 ```
 
 ## Options
 
+Positional arguments remain `sourcePdf`, `dpi`, `bgBpp`, `fgBpp`; anything of the form
+`key=value` after them overrides the corresponding option.
+
 | Option | Default | Meaning |
 |---|---|---|
-| `thresholdBlockSize` | 31 | Adaptive threshold window (odd pixels) |
+| `thresholdBlockSize` / `blockSize` | 31 | Adaptive threshold window (odd pixels) |
 | `thresholdC` | 10.0 | Adaptive threshold constant |
-| `backgroundBlurKernel` | 9 | Median blur used to fill ink areas in the background plate |
-| `maskOpenKernel` | 3 | Morphological opening kernel for the ink mask; 0 disables it |
-| `backgroundClearDilation` | 3 | Mask dilation when clearing ink from the background |
-| `backgroundBitsPerPixel` | 0.4 | JPEG 2000 rate for the background plate |
-| `foregroundBitsPerPixel` | 0.3 | JPEG 2000 rate for the foreground plate |
+| `backgroundBlurKernel` / `bgBlur` | 9 | Median blur used to fill ink areas in the background plate |
+| `maskOpenKernel` / `maskOpen` | 3 | Morphological opening kernel for the ink mask; 0 disables it |
+| `backgroundClearDilation` / `clearDilation` | 3 | Mask dilation when clearing ink from the background |
+| `maskEncoding` / `mask` | `CCITT_G4` | `g4` or `flate` encoding for the 1-bit mask |
+| `backgroundFormat` / `bgFormat` | `JPEG` | `jpeg` or `jpx` |
+| `backgroundScale` / `bgScale` | 2.0 | Background downsampling factor (≥ 1); mask/foreground stay full-res |
+| `backgroundJpegQuality` / `bgQuality` | 0.6 | JPEG quality for the background |
+| `backgroundBitsPerPixel` / `bgBpp` | 0.4 | JPEG 2000 rate when `bgFormat=jpx` |
+| `foregroundFormat` / `fgFormat` | `JPX` | `jpx` or `jpeg` |
+| `foregroundBitsPerPixel` / `fgBpp` | 0.05 | JPEG 2000 rate for the foreground |
+| `foregroundJpegQuality` / `fgQuality` | 0.7 | JPEG quality when `fgFormat=jpeg` |
+| `inkMode` / `fgMode` | `AUTO` | `auto`, `image`, or `stencil` |
+| `stencilMaxSaturation` / `stencilSat` | 24 | AUTO: max mean HSV saturation of ink to use a black stencil |
+| `stencilMaxValue` / `stencilVal` | 110 | AUTO: max mean HSV value of ink to use a black stencil |
 
-Lower rates produce smaller files; higher rates preserve more color fidelity in flat and
-halftone areas.
+Lower rates/qualities produce smaller files; higher ones preserve more color fidelity in flat
+and halftone areas.
+
+### Why the defaults look like this
+
+- **CCITT G4 mask** — a binary text/line-art mask compresses several times smaller as G4 than
+  as Flate, and every PDF reader supports it.
+- **Downsampled JPEG background** — the background contains no line art (ink was removed), so
+  halving its resolution is barely visible while cutting its bytes by roughly 3–4×.
+- **Low-rate JPEG 2000 foreground** — the foreground plate is only ever visible through the
+  binary mask, so it tolerates much lower rates than a normal photo.
+- **AUTO stencil** — when the ink is dark and nearly neutral (black text), `AUTO` paints the
+  G4 mask directly in black and omits the foreground plate entirely. Colored pages keep the
+  foreground plate.
 
 ## Notes
 
-- The mask is currently stored as 1-bit Flate. JPEG 2000 (JPX) is used for both color plates;
-  PDFBox needs the `jai-imageio-jpeg2000` ImageIO plugin to decode those when rendering.
+- JPEG 2000 is the default for the foreground plate. Viewers without a JPX decoder
+  (`jai-imageio-jpeg2000` for PDFBox-based rendering) should use `fgFormat=jpeg` or
+  `fgMode=stencil`.
 - Pure Java has no JBIG2 encoder. If you have `jbig2enc`, its output can be embedded the same
-  way (raw stream + `/JBIG2Decode`) to shrink the mask further.
+  way (raw stream + `/JBIG2Decode`) to shrink the mask further than G4.
 - Rendering above the page's native resolution does not add detail; feed mrc4j images at their
   native scan DPI.
 
