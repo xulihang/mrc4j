@@ -123,12 +123,16 @@ public final class MrcPdfFromImages {
         List<Path> images;
         try (Stream<Path> stream = Files.list(imagesDir)) {
             images = stream
-                    .filter(p -> p.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".png"))
+                    .filter(p -> {
+                        String name = p.getFileName().toString().toLowerCase(Locale.ROOT);
+                        return name.endsWith(".png") || name.endsWith(".jpg")
+                                || name.endsWith(".jpeg");
+                    })
                     .sorted(Comparator.comparing(p -> p.getFileName().toString()))
                     .collect(Collectors.toList());
         }
         if (images.isEmpty()) {
-            throw new IllegalArgumentException("No PNG images found in " + imagesDir);
+            throw new IllegalArgumentException("No PNG/JPEG images found in " + imagesDir);
         }
 
         List<float[]> pageSizes = null;
@@ -275,14 +279,26 @@ public final class MrcPdfFromImages {
     }
 
     private static Path[] requireIntermediates(Path image, Path intermediateDir) throws IOException {
-        Path maskPath = intermediateDir.resolve(image.getFileName() + "-mask.png");
-        Path removedPath = intermediateDir.resolve(image.getFileName() + "-text-removed.png");
-        if (!Files.isRegularFile(maskPath) || !Files.isRegularFile(removedPath)) {
-            throw new IOException("Missing ImageTrans intermediates for " + image.getFileName()
-                    + " (expected " + maskPath.getFileName() + " and "
-                    + removedPath.getFileName() + ")");
+        String base = image.getFileName().toString();
+        Path maskPath = findIntermediate(intermediateDir, base + "-mask", ".png", ".jpg", ".jpeg");
+        Path removedPath = findIntermediate(intermediateDir, base + "-text-removed",
+                ".png", ".jpg", ".jpeg");
+        if (maskPath == null || removedPath == null) {
+            throw new IOException("Missing ImageTrans intermediates for " + base
+                    + " (expected " + base + "-mask.png and " + base
+                    + "-text-removed.png/.jpg)");
         }
         return new Path[] { maskPath, removedPath };
+    }
+
+    private static Path findIntermediate(Path dir, String base, String... extensions) {
+        for (String extension : extensions) {
+            Path path = dir.resolve(base + extension);
+            if (Files.isRegularFile(path)) {
+                return path;
+            }
+        }
+        return null;
     }
 
     private static void applyOption(MrcPdfBuilder.Options options, String arg) {
