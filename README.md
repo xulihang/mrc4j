@@ -106,6 +106,26 @@ text foreground is lossless, and the coverage mask is extended by every pixel th
 between the original and the text-removed image. The reconstructed page is then pixel-identical
 to the source (the file is naturally much larger than the lossy textmask output).
 
+### Stencil mode (DjVu/pdfbeads-style)
+
+`mode=stencil` uses the same ImageTrans intermediates to build a two-layer page:
+
+- **foreground** — 1-bit stencils: high-contrast neutral line art and black text in a black
+  stencil, light text in a white stencil, both CCITT G4 (the pure-Java equivalent of JBIG2;
+  pdfbeads falls back to G4 too, and on these pages it was even smaller than JBIG2);
+- **background** — the text-removed image as a full-resolution JPEG 2000 color plate. Large
+  dark areas stay in the color plate; only strongly local-contrast strokes go to the stencil.
+
+```bash
+mvn compile exec:java -Dexec.mainClass=com.xulihang.mrc4j.MrcPdfFromImages \
+  -Dexec.args="pages out.pdf - 300 mode=stencil intermediate=path/to/intermediateResults bgBpp=0.4"
+```
+
+Text is crisp with no lossy color plate around it, and the color background carries the
+halftones and dark areas. `stencilContrast` (default 50) controls how much darker than its
+surroundings a pixel must be to enter the line-art stencil; raise it to keep only stronger
+outlines. `stencilMaxS` (default 90) keeps saturated dark colors out of the black stencil.
+
 ## Options
 
 Positional arguments remain `sourcePdf`, `dpi`, `bgBpp`, `fgBpp`; anything of the form
@@ -113,11 +133,18 @@ Positional arguments remain `sourcePdf`, `dpi`, `bgBpp`, `fgBpp`; anything of th
 
 | Option | Default | Meaning |
 |---|---|---|
-| `mode` | `mrc` | `mrc` (layered, lossy), `lossless` (one full-res lossless JPX per page), or `textmask` |
-| `intermediate` | — | ImageTrans intermediate directory for `mode=textmask` |
-| `textMaskDilation` | 1 | Mask dilation in pixels for `mode=textmask` |
-| `textFgBpp` | 0.2 | Text foreground JPX rate; the smaller of lossless and this rate is kept (0 = lossless only) |
-| `bgLossless` | false | `mode=textmask`: lossless background + lossless text fg (bit-exact; requires `bgScale=1`) |
+| `mode` | `mrc` | `mrc`, `lossless`, `textmask`, or `stencil` |
+| `intermediate` | — | ImageTrans intermediate directory for `mode=textmask` / `mode=stencil` |
+| `textMaskDilation` | 1 | Mask dilation in pixels for textmask/stencil modes |
+| `textFgBpp` | 0.2 | Textmask foreground JPX rate; the smaller of lossless and this rate is kept (0 = lossless only) |
+| `bgLossless` | false | Textmask: lossless background + lossless text fg (bit-exact; requires `bgScale=1`) |
+| `stencilContrast` | 50 | Stencil: adaptive threshold constant for neutral line art |
+| `stencilMaxS` | 90 | Stencil: max HSV saturation for black ink |
+| `stencilDilation` | 0 | Stencil: dilation of the black line-art stencil |
+| `stencilClear` | false | Stencil: blur/clear the background under the stencils |
+| `stencilClearDilation` | 1 | Stencil: clearing dilation when `stencilClear=1` |
+| `textDiffMargin` | 8 | Stencil: minimum luma change to treat a pixel as text |
+| `textBinThreshold` | 128 | Stencil: luma threshold splitting black/white text |
 | `thresholdBlockSize` / `blockSize` | 31 | Adaptive threshold window (odd pixels) |
 | `thresholdC` | 10.0 | Adaptive threshold constant |
 | `backgroundBlurKernel` / `bgBlur` | 9 | Median blur used to fill ink areas in the background plate |

@@ -19,6 +19,7 @@ import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.opencv.core.Core;
 import org.opencv.core.CvType;
 import org.opencv.core.Mat;
+import org.opencv.core.Rect;
 import org.opencv.core.Scalar;
 import org.opencv.core.Size;
 import org.opencv.imgcodecs.Imgcodecs;
@@ -158,6 +159,29 @@ public final class MrcPdfBuilder implements AutoCloseable {
          * reconstructed page is bit-exact. Requires {@code backgroundScale=1}.
          */
         public boolean backgroundLossless = false;
+
+        /**
+         * Stencil mode: adaptive threshold constant. Higher values keep only
+         * pixels that are strongly darker than their surroundings, so large
+         * dark areas stay in the color background instead of becoming flat
+         * black.
+         */
+        public double stencilContrast = 50.0;
+        /** Stencil mode: max HSV saturation for neutral ink included in the black stencil. */
+        public double stencilBlackMaxSaturation = 90.0;
+        /** Stencil mode: dilation applied to the black line-art stencil. */
+        public int stencilDilation = 0;
+        /** Stencil mode: dilation used when clearing stencil areas from the background. */
+        public int stencilClearDilation = 1;
+        /** Stencil mode: blur/clear the background under the stencils. */
+        public boolean stencilClearBackground = false;
+        /**
+         * Stencil mode: minimum luminance change from the text-removed background
+         * for a pixel to count as text.
+         */
+        public double textDiffMargin = 8.0;
+        /** Stencil mode: grayscale threshold that splits black text from white text. */
+        public double textBinarizeThreshold = 128.0;
 
         public Options() {
         }
@@ -473,6 +497,328 @@ public final class MrcPdfBuilder implements AutoCloseable {
         byte[] jpx = encodeJpxLossless(bg);
         return imageXObject(jpx, COSName.JPX_DECODE, null,
                 bg.getWidth(), bg.getHeight(), COSName.DEVICERGB, 8, false);
+    }
+
+    /** Statistics for one page built in stencil mode. */
+    public static final class StencilStats {
+        private final long backgroundBytes;
+        private final long blackBytes;
+        private final long whiteBytes;
+        private final int blackPixels;
+        private final int whitePixels;
+
+        StencilStats(long backgroundBytes, long blackBytes, long whiteBytes,
+                     int blackPixels, int whitePixels) {
+            this.backgroundBytes = backgroundBytes;
+            this.blackBytes = blackBytes;
+            this.whiteBytes = whiteBytes;
+            this.blackPixels = blackPixels;
+            this.whitePixels = whitePixels;
+        }
+
+        public long getBackgroundBytes() {
+            return backgroundBytes;
+        }
+
+        public long getBlackBytes() {
+            return blackBytes;
+        }
+
+        public long getWhiteBytes() {
+            return whiteBytes;
+        }
+
+        public int getBlackPixels() {
+            return blackPixels;
+        }
+
+        public int getWhitePixels() {
+            return whitePixels;
+        }
+    }
+
+    /**
+     * Adds a page in DjVu/pdfbeads style: a 1-bit black stencil for neutral
+     * line art and black text, a 1-bit white stencil for light text, and a
+     * full-color JPEG 2000 background built from the text-removed image with
+     * the stencil areas cleared.
+     */
+    public StencilStats addStencilPage(Path imagePath, Path textMaskPath,
+                                       Path textRemovedPath,
+                                       float widthPt, float heightPt) throws IOException {
+        return addStencilPage(readImage(imagePath), readImage(textMaskPath),
+                readImage(textRemovedPath), widthPt, heightPt);
+    }
+
+    /** Adds a page in DjVu/pdfbeads style. */
+    public StencilStats addStencilPage(BufferedImage image, BufferedImage textMaskImage,
+                                       BufferedImage textRemoved,
+                                       float widthPt, float heightPt) throws IOException {
+        int w = image.getWidth();
+        int h = image.getHeight();
+        if (textMaskImage.getWidth() != w || textMaskImage.getHeight() != h
+                || textRemoved.getWidth() != w || textRemoved.getHeight() != h) {
+            throw new IOException("Image, text mask and text-removed image sizes do not match");
+        }
+
+        Mat bgr = toBgrMat(toBgr(image));
+        Mat gray = new Mat();
+        Mat ink = new Mat();
+        Mat black = new Mat();
+        Mat white = new Mat(h, w, CvType.CV_8UC1, new Scalar(0));
+        Mat textMask = textMaskToMat(textMaskImage);
+        Mat textStencil = new Mat();
+        Mat bg = null;
+        Mat blurred = null;
+        Mat scaled = null;
+        try {
+            Imgproc.cvtColor(bgr, gray, Imgproc.COLOR_BGR2GRAY);
+            Imgproc.adaptiveThreshold(gray, ink, 255,
+                    Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C, Imgproc.THRESH_BINARY_INV,
+                    options.thresholdBlockSize, options.stencilContrast);
+            if (options.maskOpenKernel >= 2) {
+                Mat kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT,
+                        new Size(options.maskOpenKernel, options.maskOpenKernel));
+                Mat opened = new Mat();
+                try {
+                    Imgproc.morphologyEx(ink, opened, Imgproc.MORPH_OPEN, kernel);
+                    opened.copyTo(ink);
+                } finally {
+                    kernel.release();
+                    opened.release();
+                }
+            }
+
+            // Only neutral dark ink goes into the black stencil; saturated
+            // dark colors stay in the color background.
+            Mat hsv = new Mat();
+            Mat saturationMask = new Mat();
+            List<Mat> channels = new ArrayList<>();
+            try {
+                Imgproc.cvtColor(bgr, hsv, Imgproc.COLOR_BGR2HSV);
+                Core.split(hsv, channels);
+                Imgproc.threshold(channels.get(1), saturationMask,
+                        options.stencilBlackMaxSaturation, 255, Imgproc.THRESH_BINARY_INV);
+                Core.bitwise_and(ink, saturationMask, black);
+            } finally {
+                for (Mat channel : channels) {
+                    channel.release();
+                }
+                release(hsv, saturationMask);
+            }
+
+            if (options.textMaskDilation > 0) {
+                int k = options.textMaskDilation * 2 + 1;
+                Mat kernel = Imgproc.getStructuringElement(Imgproc.MORPH_ELLIPSE, new Size(k, k));
+                try {
+                    Imgproc.dilate(textMask, textStencil, kernel);
+                } finally {
+                    kernel.release();
+                }
+            } else {
+                textMask.copyTo(textStencil);
+            }
+            bg = toBgrMat(toBgr(textRemoved));
+            Mat removedGray = new Mat();
+            Mat diff = new Mat();
+            Mat darkGray = new Mat();
+            Mat lightGray = new Mat();
+            Mat notText = new Mat();
+            try {
+                // Line art outside the text areas, then text glyphs: only
+                // pixels changed by text removal, binarized at mid-gray.
+                Imgproc.cvtColor(bg, removedGray, Imgproc.COLOR_BGR2GRAY);
+                Core.bitwise_not(textStencil, notText);
+                Core.bitwise_and(black, notText, black);
+
+                Core.absdiff(gray, removedGray, diff);
+                Imgproc.threshold(diff, diff, options.textDiffMargin,
+                        255, Imgproc.THRESH_BINARY);
+                Core.bitwise_and(diff, textStencil, diff);
+
+                Imgproc.threshold(gray, darkGray, options.textBinarizeThreshold,
+                        255, Imgproc.THRESH_BINARY_INV);
+                Imgproc.threshold(gray, lightGray, options.textBinarizeThreshold,
+                        255, Imgproc.THRESH_BINARY);
+                classifyTextPolarity(textMask, diff, darkGray, lightGray, black, white);
+            } finally {
+                release(removedGray, diff, darkGray, lightGray, notText);
+            }
+
+            if (options.stencilDilation > 0) {
+                int k = options.stencilDilation * 2 + 1;
+                Mat kernel = Imgproc.getStructuringElement(Imgproc.MORPH_ELLIPSE, new Size(k, k));
+                Mat dilated = new Mat();
+                try {
+                    Imgproc.dilate(black, dilated, kernel);
+                    dilated.copyTo(black);
+                } finally {
+                    kernel.release();
+                    dilated.release();
+                }
+            }
+
+            int blackPixels = Core.countNonZero(black);
+            int whitePixels = Core.countNonZero(white);
+
+            if (options.stencilClearBackground) {
+                Mat clear = new Mat();
+                try {
+                    Core.bitwise_or(black, white, clear);
+                    if (options.stencilClearDilation > 0) {
+                        int k = options.stencilClearDilation * 2 + 1;
+                        Mat kernel = Imgproc.getStructuringElement(Imgproc.MORPH_ELLIPSE, new Size(k, k));
+                        Mat dilated = new Mat();
+                        try {
+                            Imgproc.dilate(clear, dilated, kernel);
+                            dilated.copyTo(clear);
+                        } finally {
+                            kernel.release();
+                            dilated.release();
+                        }
+                    }
+                    blurred = new Mat();
+                    Imgproc.medianBlur(bg, blurred, options.backgroundBlurKernel);
+                    blurred.copyTo(bg, clear);
+                } finally {
+                    clear.release();
+                }
+            }
+
+            // Smooth the inpainted text areas so removal smudges do not show
+            // around the glyphs.
+            Mat textClean = new Mat();
+            try {
+                int cleanKernel = Math.max(9, options.backgroundBlurKernel);
+                Imgproc.medianBlur(bg, textClean, cleanKernel);
+                textClean.copyTo(bg, textStencil);
+            } finally {
+                textClean.release();
+            }
+
+            BufferedImage bgImage;
+            if (options.backgroundScale > 1.0) {
+                scaled = downsampleBackground(bg, options.backgroundScale);
+                bgImage = toBufferedImage(scaled);
+            } else {
+                bgImage = toBufferedImage(bg);
+            }
+            PDImageXObject background = encodePlate(bgImage, options.backgroundFormat,
+                    options.backgroundJpegQuality, options.backgroundBitsPerPixel);
+            if (options.backgroundScale > 1.0) {
+                background.getCOSObject().setBoolean(COSName.INTERPOLATE, true);
+            }
+
+            long blackBytes = 0;
+            PDImageXObject blackMask = null;
+            if (blackPixels > 0) {
+                blackMask = encodeMask(packMask(black), w, h, true);
+                blackBytes = blackMask.getCOSObject().getLength();
+            }
+            long whiteBytes = 0;
+            PDImageXObject whiteMask = null;
+            if (whitePixels > 0) {
+                whiteMask = encodeMask(packMask(white), w, h, true);
+                whiteBytes = whiteMask.getCOSObject().getLength();
+            }
+
+            PDRectangle box = new PDRectangle(widthPt, heightPt);
+            PDPage page = new PDPage(box);
+            page.setCropBox(box);
+            page.setRotation(0);
+            try (PDPageContentStream cs = new PDPageContentStream(document, page)) {
+                cs.drawImage(background, 0, 0, widthPt, heightPt);
+                if (blackMask != null) {
+                    cs.setNonStrokingColor(0f, 0f, 0f);
+                    cs.drawImage(blackMask, 0, 0, widthPt, heightPt);
+                }
+                if (whiteMask != null) {
+                    cs.setNonStrokingColor(1f, 1f, 1f);
+                    cs.drawImage(whiteMask, 0, 0, widthPt, heightPt);
+                }
+            }
+            document.addPage(page);
+            pageCount++;
+            return new StencilStats(background.getCOSObject().getLength(),
+                    blackBytes, whiteBytes, blackPixels, whitePixels);
+        } finally {
+            release(bgr, gray, ink, black, white, textMask, textStencil, bg, blurred, scaled);
+        }
+    }
+
+    /**
+     * Adds text pixels to the black or white stencil per text block, choosing
+     * the side with more changed pixels so a white-text block cannot leak
+     * dark pixels into the black stencil (and vice versa).
+     */
+    private static void classifyTextPolarity(Mat textMask, Mat diff, Mat dark, Mat light,
+                                             Mat black, Mat white) {
+        Mat groups = new Mat();
+        Mat labels = new Mat();
+        Mat stats = new Mat();
+        Mat centroids = new Mat();
+        Mat kernel = Imgproc.getStructuringElement(Imgproc.MORPH_ELLIPSE, new Size(17, 17));
+        try {
+            Imgproc.dilate(textMask, groups, kernel);
+        } finally {
+            kernel.release();
+        }
+        try {
+            int count = Imgproc.connectedComponentsWithStats(groups, labels, stats, centroids);
+            for (int label = 1; label < count; label++) {
+                int x = (int) stats.get(label, Imgproc.CC_STAT_LEFT)[0];
+                int y = (int) stats.get(label, Imgproc.CC_STAT_TOP)[0];
+                int width = (int) stats.get(label, Imgproc.CC_STAT_WIDTH)[0];
+                int height = (int) stats.get(label, Imgproc.CC_STAT_HEIGHT)[0];
+                if (width <= 0 || height <= 0) {
+                    continue;
+                }
+                Rect rect = new Rect(x, y, width, height);
+                Mat labelRoi = null;
+                Mat diffRoi = null;
+                Mat darkRoi = null;
+                Mat lightRoi = null;
+                Mat labelMask = null;
+                Mat block = null;
+                Mat blockDark = null;
+                Mat blockLight = null;
+                Mat targetRoi = null;
+                try {
+                    labelRoi = labels.submat(rect);
+                    diffRoi = diff.submat(rect);
+                    darkRoi = dark.submat(rect);
+                    lightRoi = light.submat(rect);
+                    labelMask = new Mat();
+                    Core.compare(labelRoi, new Scalar(label), labelMask, Core.CMP_EQ);
+                    block = new Mat();
+                    Core.bitwise_and(labelMask, diffRoi, block);
+                    blockDark = new Mat();
+                    Core.bitwise_and(block, darkRoi, blockDark);
+                    blockLight = new Mat();
+                    Core.bitwise_and(block, lightRoi, blockLight);
+                    if (Core.countNonZero(blockDark) >= Core.countNonZero(blockLight)) {
+                        targetRoi = black.submat(rect);
+                        Core.bitwise_or(targetRoi, blockDark, targetRoi);
+                    } else {
+                        targetRoi = white.submat(rect);
+                        Core.bitwise_or(targetRoi, blockLight, targetRoi);
+                    }
+                } finally {
+                    release(labelRoi, diffRoi, darkRoi, lightRoi, labelMask,
+                            block, blockDark, blockLight, targetRoi);
+                }
+            }
+        } finally {
+            release(groups, labels, stats, centroids);
+        }
+    }
+
+    private static void release(Mat... mats) {
+        for (Mat mat : mats) {
+            if (mat != null) {
+                mat.release();
+            }
+        }
     }
 
     private PDImageXObject encodeTextBackground(BufferedImage textRemoved) throws IOException {
@@ -1012,6 +1358,17 @@ public final class MrcPdfBuilder implements AutoCloseable {
         }
         if (options.backgroundLossless && options.backgroundScale > 1.0) {
             throw new IllegalArgumentException("backgroundLossless requires backgroundScale=1");
+        }
+        if (options.stencilContrast < 1 || options.stencilContrast > 255
+                || options.stencilBlackMaxSaturation < 0 || options.stencilBlackMaxSaturation > 255) {
+            throw new IllegalArgumentException("Stencil thresholds must be in [1, 255] / [0, 255]");
+        }
+        if (options.stencilDilation < 0 || options.stencilClearDilation < 0) {
+            throw new IllegalArgumentException("Stencil dilations must be >= 0");
+        }
+        if (options.textDiffMargin < 0 || options.textDiffMargin > 255
+                || options.textBinarizeThreshold < 0 || options.textBinarizeThreshold > 255) {
+            throw new IllegalArgumentException("Text thresholds must be in [0, 255]");
         }
     }
 }
