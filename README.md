@@ -108,17 +108,30 @@ to the source (the file is naturally much larger than the lossy textmask output)
 
 ### Stencil mode (DjVu/pdfbeads-style)
 
-`mode=stencil` uses the same ImageTrans intermediates to build a two-layer page:
+`mode=stencil` builds a two-layer page:
 
 - **foreground** — 1-bit stencils: high-contrast neutral line art and black text in a black
   stencil, light text in a white stencil, both CCITT G4 (the pure-Java equivalent of JBIG2;
   pdfbeads falls back to G4 too, and on these pages it was even smaller than JBIG2);
-- **background** — the text-removed image as a full-resolution JPEG 2000 color plate. Large
-  dark areas stay in the color plate; only strongly local-contrast strokes go to the stencil.
+- **background** — a full-resolution JPEG 2000 color plate. Large dark areas stay in the color
+  plate; only strongly local-contrast strokes go to the stencil.
+
+With ImageTrans intermediates it uses the text mask and text-removed image, giving a clean
+text-free background and separate white-text handling:
 
 ```bash
 mvn compile exec:java -Dexec.mainClass=com.xulihang.mrc4j.MrcPdfFromImages \
   -Dexec.args="pages out.pdf - 300 mode=stencil intermediate=path/to/intermediateResults bgBpp=0.4"
+```
+
+**No intermediates required.** If `intermediate` is omitted, the background is the original
+image with the stencil areas cleared by a median blur, and the black stencil is built from the
+original. Light text cannot be separated in this standalone mode, so it stays in the color
+background:
+
+```bash
+mvn compile exec:java -Dexec.mainClass=com.xulihang.mrc4j.MrcPdfFromImages \
+  -Dexec.args="pages out.pdf - 300 mode=stencil bgBpp=0.4"
 ```
 
 Text is crisp with no lossy color plate around it, and the color background carries the

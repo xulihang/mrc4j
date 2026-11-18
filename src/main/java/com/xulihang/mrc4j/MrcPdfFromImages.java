@@ -41,11 +41,12 @@ import java.util.stream.Stream;
  * original text pixels selected by the mask become a lossless JPEG 2000
  * foreground, and the mask is its G4 soft mask.</p>
  *
- * <p>{@code mode=stencil} reads the same intermediates but builds a
- * pdfbeads/DjVu-style page instead: neutral line art and black text become a
- * 1-bit black stencil, light text becomes a 1-bit white stencil (both G4, the
- * pure-Java equivalent of JBIG2), and the background is a JPEG 2000 color
- * image built from the text-removed image.</p>
+ * <p>{@code mode=stencil} uses the same intermediates when available, or the
+ * original images alone: neutral line art and black text become a 1-bit black
+ * stencil, light text becomes a 1-bit white stencil (when a text mask is
+ * available), and the background is a JPEG 2000 color image. Without
+ * intermediates the background is the original with the stencil areas
+ * cleared, and light text stays in the color background.</p>
  */
 public final class MrcPdfFromImages {
     private enum Mode {
@@ -105,13 +106,18 @@ public final class MrcPdfFromImages {
             if (!hasArgKey(args, "bgbpp")) {
                 options.backgroundBitsPerPixel = 0.4;
             }
+        }
+        if (mode == Mode.TEXTMASK) {
             if (intermediateDir == null) {
-                throw new IllegalArgumentException("mode=" + (mode == Mode.STENCIL ? "stencil" : "textmask")
-                        + " requires intermediate=<ImageTrans intermediateResults dir>");
+                throw new IllegalArgumentException(
+                        "mode=textmask requires intermediate=<ImageTrans intermediateResults dir>");
             }
             if (!Files.isDirectory(intermediateDir)) {
                 throw new IllegalArgumentException("Not a directory: " + intermediateDir);
             }
+        } else if (mode == Mode.STENCIL && intermediateDir != null
+                && !Files.isDirectory(intermediateDir)) {
+            throw new IllegalArgumentException("Not a directory: " + intermediateDir);
         }
 
         List<Path> images;
@@ -149,7 +155,8 @@ public final class MrcPdfFromImages {
                     fgDetail, options.maskEncoding, options.textMaskDilation);
         } else if (mode == Mode.STENCIL) {
             System.out.printf(Locale.ROOT,
-                    "mode: stencil (bg=%s scale %.2f %s, 1-bit stencils=%s, contrast %.0f S<=%.0f)%n",
+                    "mode: stencil%s (bg=%s scale %.2f %s, 1-bit stencils=%s, contrast %.0f S<=%.0f)%n",
+                    intermediateDir == null ? " standalone (no ImageTrans intermediates)" : "",
                     options.backgroundFormat, options.backgroundScale,
                     options.backgroundFormat == MrcPdfBuilder.PlateFormat.JPEG
                             ? "q=" + options.backgroundJpegQuality
@@ -193,28 +200,32 @@ public final class MrcPdfFromImages {
                             n + 1, images.size(), image.getFileName(), pixelSize[0], pixelSize[1],
                             widthPt, heightPt, bytes / 1024,
                             System.currentTimeMillis() - start);
-                } else if (mode == Mode.TEXTMASK || mode == Mode.STENCIL) {
+                } else if (mode == Mode.TEXTMASK) {
                     Path[] intermediates = requireIntermediates(image, intermediateDir);
-                    if (mode == Mode.TEXTMASK) {
-                        MrcPdfBuilder.TextMaskStats stats = builder.addTextMaskedPage(
-                                image, intermediates[0], intermediates[1], widthPt, heightPt);
-                        System.out.printf(Locale.ROOT,
-                                "page %2d/%d  %s  text=%dpx bg=%dKB fg=%dKB mask=%dKB  %.2f x %.2f pt  %d ms%n",
-                                n + 1, images.size(), image.getFileName(), stats.getTextPixels(),
-                                stats.getBackgroundBytes() / 1024, stats.getForegroundBytes() / 1024,
-                                stats.getMaskBytes() / 1024, widthPt, heightPt,
-                                System.currentTimeMillis() - start);
+                    MrcPdfBuilder.TextMaskStats stats = builder.addTextMaskedPage(
+                            image, intermediates[0], intermediates[1], widthPt, heightPt);
+                    System.out.printf(Locale.ROOT,
+                            "page %2d/%d  %s  text=%dpx bg=%dKB fg=%dKB mask=%dKB  %.2f x %.2f pt  %d ms%n",
+                            n + 1, images.size(), image.getFileName(), stats.getTextPixels(),
+                            stats.getBackgroundBytes() / 1024, stats.getForegroundBytes() / 1024,
+                            stats.getMaskBytes() / 1024, widthPt, heightPt,
+                            System.currentTimeMillis() - start);
+                } else if (mode == Mode.STENCIL) {
+                    MrcPdfBuilder.StencilStats stats;
+                    if (intermediateDir == null) {
+                        stats = builder.addStencilPage(image, widthPt, heightPt);
                     } else {
-                        MrcPdfBuilder.StencilStats stats = builder.addStencilPage(
-                                image, intermediates[0], intermediates[1], widthPt, heightPt);
-                        System.out.printf(Locale.ROOT,
-                                "page %2d/%d  %s  black=%dpx/%dKB white=%dpx/%dKB bg=%dKB  %.2f x %.2f pt  %d ms%n",
-                                n + 1, images.size(), image.getFileName(),
-                                stats.getBlackPixels(), stats.getBlackBytes() / 1024,
-                                stats.getWhitePixels(), stats.getWhiteBytes() / 1024,
-                                stats.getBackgroundBytes() / 1024, widthPt, heightPt,
-                                System.currentTimeMillis() - start);
+                        Path[] intermediates = requireIntermediates(image, intermediateDir);
+                        stats = builder.addStencilPage(image, intermediates[0], intermediates[1],
+                                widthPt, heightPt);
                     }
+                    System.out.printf(Locale.ROOT,
+                            "page %2d/%d  %s  black=%dpx/%dKB white=%dpx/%dKB bg=%dKB  %.2f x %.2f pt  %d ms%n",
+                            n + 1, images.size(), image.getFileName(),
+                            stats.getBlackPixels(), stats.getBlackBytes() / 1024,
+                            stats.getWhitePixels(), stats.getWhiteBytes() / 1024,
+                            stats.getBackgroundBytes() / 1024, widthPt, heightPt,
+                            System.currentTimeMillis() - start);
                 } else {
                     MrcPdfBuilder.PageLayers layers = builder.addPage(image, widthPt, heightPt);
                     boolean stencil = MrcPdfBuilder.useStencilFor(layers, options);
@@ -426,7 +437,9 @@ public final class MrcPdfFromImages {
     private static void printUsage() {
         System.err.println("Usage: MrcPdfFromImages <imagesDir> <outPdf> [sourcePdf|-] [dpi=300] [bgBpp=0.4] [fgBpp=0.05] [key=value...]");
         System.err.println("Options: mode=mrc|lossless|textmask|stencil");
-        System.err.println("         textmask/stencil: intermediate=<ImageTrans intermediateResults dir>");
+        System.err.println("         textmask: intermediate=<ImageTrans intermediateResults dir> (required)");
+        System.err.println("         stencil:  intermediate=<dir> is optional; without it the");
+        System.err.println("                   background is built from the original image");
         System.err.println("         stencil: stencilContrast=50 stencilMaxS=90 stencilDilation=0");
         System.err.println("                  stencilClear=0 stencilClearDilation=1");
         System.err.println("                  textDiffMargin=8 textBinThreshold=128");

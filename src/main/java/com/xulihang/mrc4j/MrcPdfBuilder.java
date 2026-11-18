@@ -550,14 +550,33 @@ public final class MrcPdfBuilder implements AutoCloseable {
                 readImage(textRemovedPath), widthPt, heightPt);
     }
 
+    /**
+     * Adds a page in DjVu/pdfbeads style without ImageTrans intermediates.
+     * The black stencil is built from the original image and the color
+     * background is the original with the stencil areas cleared; light text is
+     * not separated and stays in the color background.
+     */
+    public StencilStats addStencilPage(Path imagePath, float widthPt, float heightPt)
+            throws IOException {
+        return addStencilPage(readImage(imagePath), widthPt, heightPt);
+    }
+
+    /** Adds a page in DjVu/pdfbeads style without ImageTrans intermediates. */
+    public StencilStats addStencilPage(BufferedImage image, float widthPt, float heightPt)
+            throws IOException {
+        return addStencilPage(image, null, null, widthPt, heightPt);
+    }
+
     /** Adds a page in DjVu/pdfbeads style. */
     public StencilStats addStencilPage(BufferedImage image, BufferedImage textMaskImage,
                                        BufferedImage textRemoved,
                                        float widthPt, float heightPt) throws IOException {
         int w = image.getWidth();
         int h = image.getHeight();
-        if (textMaskImage.getWidth() != w || textMaskImage.getHeight() != h
-                || textRemoved.getWidth() != w || textRemoved.getHeight() != h) {
+        boolean hasTextMask = textMaskImage != null;
+        boolean hasRemoved = textRemoved != null;
+        if ((hasTextMask && (textMaskImage.getWidth() != w || textMaskImage.getHeight() != h))
+                || (hasRemoved && (textRemoved.getWidth() != w || textRemoved.getHeight() != h))) {
             throw new IOException("Image, text mask and text-removed image sizes do not match");
         }
 
@@ -566,7 +585,8 @@ public final class MrcPdfBuilder implements AutoCloseable {
         Mat ink = new Mat();
         Mat black = new Mat();
         Mat white = new Mat(h, w, CvType.CV_8UC1, new Scalar(0));
-        Mat textMask = textMaskToMat(textMaskImage);
+        Mat textMask = hasTextMask ? textMaskToMat(textMaskImage)
+                : new Mat(h, w, CvType.CV_8UC1, new Scalar(0));
         Mat textStencil = new Mat();
         Mat bg = null;
         Mat blurred = null;
@@ -618,31 +638,37 @@ public final class MrcPdfBuilder implements AutoCloseable {
             } else {
                 textMask.copyTo(textStencil);
             }
-            bg = toBgrMat(toBgr(textRemoved));
-            Mat removedGray = new Mat();
-            Mat diff = new Mat();
-            Mat darkGray = new Mat();
-            Mat lightGray = new Mat();
-            Mat notText = new Mat();
-            try {
-                // Line art outside the text areas, then text glyphs: only
-                // pixels changed by text removal, binarized at mid-gray.
-                Imgproc.cvtColor(bg, removedGray, Imgproc.COLOR_BGR2GRAY);
-                Core.bitwise_not(textStencil, notText);
-                Core.bitwise_and(black, notText, black);
+            if (hasRemoved) {
+                bg = toBgrMat(toBgr(textRemoved));
+                Mat removedGray = new Mat();
+                Mat diff = new Mat();
+                Mat darkGray = new Mat();
+                Mat lightGray = new Mat();
+                Mat notText = new Mat();
+                try {
+                    // Line art outside the text areas, then text glyphs: only
+                    // pixels changed by text removal, binarized at mid-gray.
+                    Imgproc.cvtColor(bg, removedGray, Imgproc.COLOR_BGR2GRAY);
+                    Core.bitwise_not(textStencil, notText);
+                    Core.bitwise_and(black, notText, black);
 
-                Core.absdiff(gray, removedGray, diff);
-                Imgproc.threshold(diff, diff, options.textDiffMargin,
-                        255, Imgproc.THRESH_BINARY);
-                Core.bitwise_and(diff, textStencil, diff);
+                    Core.absdiff(gray, removedGray, diff);
+                    Imgproc.threshold(diff, diff, options.textDiffMargin,
+                            255, Imgproc.THRESH_BINARY);
+                    Core.bitwise_and(diff, textStencil, diff);
 
-                Imgproc.threshold(gray, darkGray, options.textBinarizeThreshold,
-                        255, Imgproc.THRESH_BINARY_INV);
-                Imgproc.threshold(gray, lightGray, options.textBinarizeThreshold,
-                        255, Imgproc.THRESH_BINARY);
-                classifyTextPolarity(textMask, diff, darkGray, lightGray, black, white);
-            } finally {
-                release(removedGray, diff, darkGray, lightGray, notText);
+                    Imgproc.threshold(gray, darkGray, options.textBinarizeThreshold,
+                            255, Imgproc.THRESH_BINARY_INV);
+                    Imgproc.threshold(gray, lightGray, options.textBinarizeThreshold,
+                            255, Imgproc.THRESH_BINARY);
+                    classifyTextPolarity(textMask, diff, darkGray, lightGray, black, white);
+                } finally {
+                    release(removedGray, diff, darkGray, lightGray, notText);
+                }
+            } else {
+                // No text-removed image: the color background is the original;
+                // the stencil area is cleared below.
+                bg = bgr;
             }
 
             if (options.stencilDilation > 0) {
@@ -661,7 +687,7 @@ public final class MrcPdfBuilder implements AutoCloseable {
             int blackPixels = Core.countNonZero(black);
             int whitePixels = Core.countNonZero(white);
 
-            if (options.stencilClearBackground) {
+            if (options.stencilClearBackground || !hasRemoved) {
                 Mat clear = new Mat();
                 try {
                     Core.bitwise_or(black, white, clear);
@@ -685,15 +711,17 @@ public final class MrcPdfBuilder implements AutoCloseable {
                 }
             }
 
-            // Smooth the inpainted text areas so removal smudges do not show
-            // around the glyphs.
-            Mat textClean = new Mat();
-            try {
-                int cleanKernel = Math.max(9, options.backgroundBlurKernel);
-                Imgproc.medianBlur(bg, textClean, cleanKernel);
-                textClean.copyTo(bg, textStencil);
-            } finally {
-                textClean.release();
+            if (hasTextMask) {
+                // Smooth the inpainted text areas so removal smudges do not
+                // show around the glyphs.
+                Mat textClean = new Mat();
+                try {
+                    int cleanKernel = Math.max(9, options.backgroundBlurKernel);
+                    Imgproc.medianBlur(bg, textClean, cleanKernel);
+                    textClean.copyTo(bg, textStencil);
+                } finally {
+                    textClean.release();
+                }
             }
 
             BufferedImage bgImage;
@@ -742,7 +770,10 @@ public final class MrcPdfBuilder implements AutoCloseable {
             return new StencilStats(background.getCOSObject().getLength(),
                     blackBytes, whiteBytes, blackPixels, whitePixels);
         } finally {
-            release(bgr, gray, ink, black, white, textMask, textStencil, bg, blurred, scaled);
+            release(bgr, gray, ink, black, white, textMask, textStencil, blurred, scaled);
+            if (bg != null && bg != bgr) {
+                bg.release();
+            }
         }
     }
 
