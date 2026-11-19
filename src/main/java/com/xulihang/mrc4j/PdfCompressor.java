@@ -221,16 +221,31 @@ public final class PdfCompressor {
 
     List<ImageResult> compressAll() throws IOException {
         List<ImageResult> results = new ArrayList<>();
+        int pages = doc.getNumberOfPages();
+        // Collect the pages up front: compressing a page updates the page tree,
+        // and iterating a page tree that changes mid-iteration can skip pages.
+        List<PDPage> pageList = new ArrayList<>();
+        for (PDPage page : doc.getPages()) {
+            pageList.add(page);
+        }
         int pageNumber = 1;
         PageCompressor pageCompressor = new PageCompressor(doc, this);
-        for (PDPage page : doc.getPages()) {
+        progress(0, pages);
+        for (PDPage page : pageList) {
             if (options.debug) {
                 System.out.println("page " + pageNumber);
             }
             results.addAll(pageCompressor.compress(page, pageNumber));
+            progress(pageNumber, pages);
             pageNumber++;
         }
         return results;
+    }
+
+    /** Print {@code done/total} on its own line while pages are compressed. */
+    private static void progress(int done, int total) {
+        System.out.printf(Locale.ROOT, "%d/%d%n", done, total);
+        System.out.flush();
     }
 
     /** Extract, decompose and encode one page image. */
