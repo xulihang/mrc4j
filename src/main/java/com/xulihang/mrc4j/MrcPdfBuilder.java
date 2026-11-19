@@ -1,4 +1,4 @@
-package com.xulihang.mrc4j;
+﻿package com.xulihang.mrc4j;
 
 import com.github.jaiimageio.jpeg2000.J2KImageWriteParam;
 import nu.pattern.OpenCV;
@@ -152,6 +152,19 @@ public final class MrcPdfBuilder implements AutoCloseable {
          * with the rate, sparse pages with lossless.
          */
         public double textForegroundBitsPerPixel = 0.2;
+        /**
+         * Text-mask foreground: Gaussian sigma used to fill pixels outside the
+         * mask with nearby colours instead of black. A hard black boundary is
+         * what makes lossy JPEG 2000 ring around glyphs; 0 restores black.
+         */
+        public double textForegroundFillSigma = 0;
+        /**
+         * Text-mask: when &gt; 0, tighten the mask to pixels whose luma differs
+         * from the text-removed image by at least this value. This removes the
+         * light antialias fringe from the foreground, which is what lossy
+         * JPEG 2000 turns into a halo. 0 keeps the raw mask.
+         */
+        public double textMaskTightenMargin = 0;
         /**
          * Encode the text-mask background losslessly (full-resolution lossless
          * JPEG 2000). The text coverage mask is extended by any pixel that
@@ -402,11 +415,38 @@ public final class MrcPdfBuilder implements AutoCloseable {
                 textMask.copyTo(mask);
             }
 
+            original = toBgrMat(toBgr(image));
+            if (options.textMaskTightenMargin > 0) {
+                Mat removedBgr = toBgrMat(toBgr(textRemoved));
+                Mat originalGray = new Mat();
+                Mat removedGray = new Mat();
+                Mat darker = new Mat();
+                Mat lighter = new Mat();
+                Mat tight = new Mat();
+                try {
+                    Imgproc.cvtColor(original, originalGray, Imgproc.COLOR_BGR2GRAY);
+                    Imgproc.cvtColor(removedBgr, removedGray, Imgproc.COLOR_BGR2GRAY);
+                    Core.subtract(removedGray, originalGray, darker);
+                    Core.subtract(originalGray, removedGray, lighter);
+                    Imgproc.threshold(darker, darker, options.textMaskTightenMargin,
+                            255, Imgproc.THRESH_BINARY);
+                    Imgproc.threshold(lighter, lighter, options.textMaskTightenMargin,
+                            255, Imgproc.THRESH_BINARY);
+                    Core.bitwise_or(darker, lighter, tight);
+                    Core.bitwise_and(tight, mask, tight);
+                    if (Core.countNonZero(tight) > 0) {
+                        tight.copyTo(mask);
+                    }
+                } finally {
+                    removedBgr.release();
+                    release(originalGray, removedGray, darker, lighter, tight);
+                }
+            }
+
             PDImageXObject background;
             if (options.backgroundLossless) {
                 // Cover every pixel where removing the text changed the image,
                 // so the foreground restores the original exactly.
-                original = toBgrMat(toBgr(image));
                 Mat bgPixels = toBgrMat(toBgr(textRemoved));
                 try {
                     addDifferenceToMask(original, bgPixels, mask);
@@ -422,14 +462,17 @@ public final class MrcPdfBuilder implements AutoCloseable {
             byte[] packedMask = packMask(mask);
             PDImageXObject softMask = encodeMask(packedMask, w, h, false);
 
-            if (original == null) {
-                original = toBgrMat(toBgr(image));
-            }
             Mat foreground = original.clone();
             Mat inverse = new Mat();
+            Mat smoothFill = null;
             try {
                 Core.bitwise_not(mask, inverse);
-                foreground.setTo(new Scalar(0, 0, 0), inverse);
+                if (options.textForegroundFillSigma > 0) {
+                    smoothFill = radiateFill(original, mask, options.textForegroundFillSigma);
+                    smoothFill.copyTo(foreground, inverse);
+                } else {
+                    foreground.setTo(new Scalar(0, 0, 0), inverse);
+                }
                 BufferedImage foregroundImageBitmap = toBufferedImage(foreground);
                 byte[] foregroundJpx = encodeJpxLossless(foregroundImageBitmap);
                 if (!options.backgroundLossless && options.textForegroundBitsPerPixel > 0) {
@@ -456,6 +499,9 @@ public final class MrcPdfBuilder implements AutoCloseable {
                 return new TextMaskStats(background.getCOSObject().getLength(),
                         foregroundJpx.length, softMask.getCOSObject().getLength(), textPixels);
             } finally {
+                if (smoothFill != null) {
+                    smoothFill.release();
+                }
                 foreground.release();
                 inverse.release();
             }
@@ -641,29 +687,39 @@ public final class MrcPdfBuilder implements AutoCloseable {
             if (hasRemoved) {
                 bg = toBgrMat(toBgr(textRemoved));
                 Mat removedGray = new Mat();
-                Mat diff = new Mat();
+                Mat darker = new Mat();
+                Mat lighter = new Mat();
                 Mat darkGray = new Mat();
                 Mat lightGray = new Mat();
                 Mat notText = new Mat();
                 try {
-                    // Line art outside the text areas, then text glyphs: only
-                    // pixels changed by text removal, binarized at mid-gray.
+                    // Text glyphs are the pixels that text removal changed:
+                    // darker than the removed background (black text) or
+                    // lighter (white text). This ignores the light background
+                    // that the (thick) mask may contain.
                     Imgproc.cvtColor(bg, removedGray, Imgproc.COLOR_BGR2GRAY);
                     Core.bitwise_not(textStencil, notText);
                     Core.bitwise_and(black, notText, black);
 
-                    Core.absdiff(gray, removedGray, diff);
-                    Imgproc.threshold(diff, diff, options.textDiffMargin,
+                    Core.subtract(removedGray, gray, darker);
+                    Imgproc.threshold(darker, darker, options.textDiffMargin,
                             255, Imgproc.THRESH_BINARY);
-                    Core.bitwise_and(diff, textStencil, diff);
+                    Core.subtract(gray, removedGray, lighter);
+                    Imgproc.threshold(lighter, lighter, options.textDiffMargin,
+                            255, Imgproc.THRESH_BINARY);
 
                     Imgproc.threshold(gray, darkGray, options.textBinarizeThreshold,
                             255, Imgproc.THRESH_BINARY_INV);
                     Imgproc.threshold(gray, lightGray, options.textBinarizeThreshold,
                             255, Imgproc.THRESH_BINARY);
-                    classifyTextPolarity(textMask, diff, darkGray, lightGray, black, white);
+                    Core.bitwise_and(darker, darkGray, darker);
+                    Core.bitwise_and(darker, textStencil, darker);
+                    Core.bitwise_and(lighter, lightGray, lighter);
+                    Core.bitwise_and(lighter, textStencil, lighter);
+
+                    classifyTextPolarity(textMask, darker, lighter, black, white);
                 } finally {
-                    release(removedGray, diff, darkGray, lightGray, notText);
+                    release(removedGray, darker, lighter, darkGray, lightGray, notText);
                 }
             } else {
                 // No text-removed image: the color background is the original;
@@ -782,7 +838,7 @@ public final class MrcPdfBuilder implements AutoCloseable {
      * the side with more changed pixels so a white-text block cannot leak
      * dark pixels into the black stencil (and vice versa).
      */
-    private static void classifyTextPolarity(Mat textMask, Mat diff, Mat dark, Mat light,
+    private static void classifyTextPolarity(Mat textMask, Mat dark, Mat light,
                                              Mat black, Mat white) {
         Mat groups = new Mat();
         Mat labels = new Mat();
@@ -806,27 +862,22 @@ public final class MrcPdfBuilder implements AutoCloseable {
                 }
                 Rect rect = new Rect(x, y, width, height);
                 Mat labelRoi = null;
-                Mat diffRoi = null;
                 Mat darkRoi = null;
                 Mat lightRoi = null;
                 Mat labelMask = null;
-                Mat block = null;
                 Mat blockDark = null;
                 Mat blockLight = null;
                 Mat targetRoi = null;
                 try {
                     labelRoi = labels.submat(rect);
-                    diffRoi = diff.submat(rect);
                     darkRoi = dark.submat(rect);
                     lightRoi = light.submat(rect);
                     labelMask = new Mat();
                     Core.compare(labelRoi, new Scalar(label), labelMask, Core.CMP_EQ);
-                    block = new Mat();
-                    Core.bitwise_and(labelMask, diffRoi, block);
                     blockDark = new Mat();
-                    Core.bitwise_and(block, darkRoi, blockDark);
+                    Core.bitwise_and(labelMask, darkRoi, blockDark);
                     blockLight = new Mat();
-                    Core.bitwise_and(block, lightRoi, blockLight);
+                    Core.bitwise_and(labelMask, lightRoi, blockLight);
                     if (Core.countNonZero(blockDark) >= Core.countNonZero(blockLight)) {
                         targetRoi = black.submat(rect);
                         Core.bitwise_or(targetRoi, blockDark, targetRoi);
@@ -835,12 +886,44 @@ public final class MrcPdfBuilder implements AutoCloseable {
                         Core.bitwise_or(targetRoi, blockLight, targetRoi);
                     }
                 } finally {
-                    release(labelRoi, diffRoi, darkRoi, lightRoi, labelMask,
-                            block, blockDark, blockLight, targetRoi);
+                    release(labelRoi, darkRoi, lightRoi, labelMask,
+                            blockDark, blockLight, targetRoi);
                 }
             }
         } finally {
             release(groups, labels, stats, centroids);
+        }
+    }
+
+    /**
+     * Fills pixels outside the mask with a normalized Gaussian average of the
+     * pixels inside the mask. The foreground then has no hard edge at the mask
+     * boundary, which is what makes lossy JPEG 2000 ring around glyphs.
+     */
+    private static Mat radiateFill(Mat original, Mat mask, double sigma) {
+        Mat maskF = new Mat();
+        Mat origF = new Mat();
+        Mat mask3 = new Mat();
+        Mat masked = new Mat();
+        Mat colors = new Mat();
+        Mat weights = new Mat();
+        Mat weights3 = new Mat();
+        Mat filledF = new Mat();
+        Mat filled = new Mat();
+        try {
+            mask.convertTo(maskF, CvType.CV_32F, 1.0 / 255.0);
+            original.convertTo(origF, CvType.CV_32FC3);
+            Imgproc.cvtColor(maskF, mask3, Imgproc.COLOR_GRAY2BGR);
+            Core.multiply(origF, mask3, masked);
+            Imgproc.GaussianBlur(masked, colors, new Size(0, 0), sigma);
+            Imgproc.GaussianBlur(maskF, weights, new Size(0, 0), sigma);
+            Imgproc.cvtColor(weights, weights3, Imgproc.COLOR_GRAY2BGR);
+            Core.add(weights3, new Scalar(0.0001, 0.0001, 0.0001), weights3);
+            Core.divide(colors, weights3, filledF);
+            filledF.convertTo(filled, CvType.CV_8UC3);
+            return filled;
+        } finally {
+            release(maskF, origF, mask3, masked, colors, weights, weights3, filledF);
         }
     }
 
@@ -1387,6 +1470,12 @@ public final class MrcPdfBuilder implements AutoCloseable {
         if (options.textForegroundBitsPerPixel < 0) {
             throw new IllegalArgumentException("textForegroundBitsPerPixel must be >= 0");
         }
+        if (options.textForegroundFillSigma < 0) {
+            throw new IllegalArgumentException("textForegroundFillSigma must be >= 0");
+        }
+        if (options.textMaskTightenMargin < 0 || options.textMaskTightenMargin > 255) {
+            throw new IllegalArgumentException("textMaskTightenMargin must be in [0, 255]");
+        }
         if (options.backgroundLossless && options.backgroundScale > 1.0) {
             throw new IllegalArgumentException("backgroundLossless requires backgroundScale=1");
         }
@@ -1403,3 +1492,4 @@ public final class MrcPdfBuilder implements AutoCloseable {
         }
     }
 }
+

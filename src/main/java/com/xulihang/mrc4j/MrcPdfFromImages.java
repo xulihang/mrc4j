@@ -339,6 +339,12 @@ public final class MrcPdfFromImages {
             case "textfgbpp":
                 options.textForegroundBitsPerPixel = Double.parseDouble(value);
                 break;
+            case "textfgfillsigma":
+                options.textForegroundFillSigma = Double.parseDouble(value);
+                break;
+            case "textmasktightenmargin":
+                options.textMaskTightenMargin = Double.parseDouble(value);
+                break;
             case "bglossless":
                 options.backgroundLossless = parseBoolean(value);
                 break;
@@ -462,6 +468,7 @@ public final class MrcPdfFromImages {
         System.err.println("         bgFormat=jpeg|jpx bgScale=2 bgQuality=0.6 fgFormat=jpx|jpeg");
         System.err.println("         fgQuality=0.7 fgBpp=0.05 mask=g4|flate fgMode=auto|image|stencil");
         System.err.println("         textMaskDilation=1 textFgBpp=0.2 (0 = lossless)");
+        System.err.println("         textFgFillSigma=0 textMaskTightenMargin=0");
         System.err.println("         bgLossless=1 (bit-exact textmask output, bgScale must be 1)");
         System.err.println("         stencilSat=24 stencilVal=110 blockSize=31 thresholdC=10");
         System.err.println("         bgBlur=9 maskOpen=3 clearDilation=3");
