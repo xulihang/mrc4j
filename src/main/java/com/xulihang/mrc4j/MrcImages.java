@@ -35,17 +35,28 @@ final class MrcImages {
 
     static String addBackground(PDDocument doc, PDResources res, String name,
                                 PdfCompressor.ImageResult r) throws IOException {
-        PDImageXObject img = image(doc, r.bgJp2(), r.bgWidth(), r.bgHeight());
+        PDImageXObject img = background(doc, r);
         xobjects(res).setItem(COSName.getPDFName(name), img.getCOSObject());
         return name;
     }
 
     static String addForeground(PDDocument doc, PDResources res, String name,
                                 PdfCompressor.ImageResult r) throws IOException {
-        PDImageXObject img = image(doc, r.fgJp2(), r.fgWidth(), r.fgHeight());
-        img.getCOSObject().setItem(COSName.SMASK, mask(doc, r));
+        PDImageXObject img = foreground(doc, r);
         xobjects(res).setItem(COSName.getPDFName(name), img.getCOSObject());
         return name;
+    }
+
+    /** The background layer as an image XObject (for direct drawing). */
+    static PDImageXObject background(PDDocument doc, PdfCompressor.ImageResult r) throws IOException {
+        return image(doc, r.bgJp2(), r.bgWidth(), r.bgHeight());
+    }
+
+    /** The foreground layer with the mask as its /SMask (for direct drawing). */
+    static PDImageXObject foreground(PDDocument doc, PdfCompressor.ImageResult r) throws IOException {
+        PDImageXObject img = image(doc, r.fgJp2(), r.fgWidth(), r.fgHeight());
+        img.getCOSObject().setItem(COSName.SMASK, mask(doc, r));
+        return img;
     }
 
     private static org.apache.pdfbox.cos.COSDictionary xobjects(PDResources res) {

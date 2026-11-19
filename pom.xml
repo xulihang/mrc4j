@@ -20,6 +20,7 @@
         <maven.build.timestamp.format>yyyy-MM-dd</maven.build.timestamp.format>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <exec.mainClass>com.xulihang.mrc4j.PdfCompressor</exec.mainClass>
+        <shade.skip>false</shade.skip>
     </properties>
 
     <dependencies>
@@ -81,6 +82,7 @@
                             <goal>shade</goal>
                         </goals>
                         <configuration>
+                            <skip>${shade.skip}</skip>
                             <!-- Merge ImageIO service registrations; otherwise
                                  only one reader/writer SPI survives shading. -->
                             <transformers>
@@ -92,4 +94,15 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- Thin jar for hosts that already ship PDFBox 2.0.31 and
+             jai-imageio 1.4.0, e.g. ImageTrans. Contains only our classes. -->
+        <profile>
+            <id>thin</id>
+            <properties>
+                <shade.skip>true</shade.skip>
+            </properties>
+        </profile>
+    </profiles>
 </project>

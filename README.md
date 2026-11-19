@@ -23,6 +23,34 @@ Produces `target/mrc4j-1.0-SNAPSHOT.jar` (self-contained; PDFBox, JAI
 JPEG2000 and jbig2 decoders are shaded in). Maven 3.6+ and JDK 11+ are
 required.
 
+### Thin jar for hosts with existing dependencies
+
+If the host application already provides PDFBox 2.0.31, fontbox and
+jai-imageio 1.4.0, build a thin jar that contains only the
+`com.xulihang.mrc4j` classes:
+
+```
+mvn -Pthin package
+```
+
+The resulting `target/mrc4j-1.0-SNAPSHOT.jar` (~67 KB) relies on the host's
+existing PDFBox/JAI jars. Do not add the shaded jar at the same time.
+
+For page-by-page processing, `Mrc4j.addPageImageFromFile` compresses a single
+image and draws the background and foreground (with its mask) into an already
+open `PDPageContentStream`:
+
+```java
+long layerBytes = Mrc4j.addPageImageFromFile(doc, contentStream, imagePath,
+        0, 0, width, height);
+```
+
+It returns the encoded layer bytes so the caller can update progress after
+each image. The overload with explicit rates takes
+`fgBpp, bgBpp, bgDownsample`. It uses the built-in JAI encoder and a G4 mask
+and needs no external `kdu_compress` / `jbig2` executable. Text drawn into the
+content stream afterwards stays on top.
+
 ## Run
 
 ```

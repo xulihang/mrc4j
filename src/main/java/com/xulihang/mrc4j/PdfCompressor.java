@@ -204,12 +204,21 @@ public final class PdfCompressor {
 
     /** Extract, decompose and encode one page image. */
     ImageResult compressImage(PDImageXObject image, int pageNumber, String name) throws IOException {
-        PixelBuffer pixels = ImageCodec.fromBufferedImage(image.getImage());
-        int w = image.getWidth();
-        int h = image.getHeight();
+        return encodePageImage(image, pageNumber, name, options);
+    }
 
+    /** Decompose/encode one PDImageXObject (used by the per-image facade). */
+    static ImageResult encodePageImage(PDImageXObject image, int pageNumber, String name,
+                                       Options options) throws IOException {
+        PixelBuffer pixels = ImageCodec.fromBufferedImage(image.getImage());
+        return encodePixels(pixels, image.getWidth(), image.getHeight(), pageNumber, name, options);
+    }
+
+    /** Decompose/encode one pixel buffer. */
+    static ImageResult encodePixels(PixelBuffer pixels, int w, int h, int pageNumber,
+                                    String name, Options options) throws IOException {
         MrcDecomposer.Options mrcOptions = options.mrc.copy();
-        mrcOptions.dpi = resolveDpi(image);
+        mrcOptions.dpi = options.mrc.dpi;
         long t0 = System.currentTimeMillis();
         MrcDecomposer.Components c = MrcDecomposer.decompose(pixels, mrcOptions);
         long t1 = System.currentTimeMillis();
