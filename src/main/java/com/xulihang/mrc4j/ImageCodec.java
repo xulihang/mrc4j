@@ -29,6 +29,7 @@ import java.awt.image.WritableRaster;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.Iterator;
 import java.util.Locale;
 
 import javax.imageio.IIOImage;
@@ -37,6 +38,10 @@ import javax.imageio.ImageReadParam;
 import javax.imageio.ImageReader;
 import javax.imageio.ImageWriteParam;
 import javax.imageio.ImageWriter;
+import javax.imageio.spi.IIORegistry;
+import javax.imageio.spi.IIOServiceProvider;
+import javax.imageio.spi.ImageReaderSpi;
+import javax.imageio.spi.ImageWriterSpi;
 import javax.imageio.stream.ImageInputStream;
 import javax.imageio.stream.MemoryCacheImageInputStream;
 import javax.imageio.stream.MemoryCacheImageOutputStream;
@@ -57,6 +62,10 @@ public final class ImageCodec {
     private ImageCodec() {
     }
 
+    /** SPI classes of the optional jai-imageio JPEG2000 plugin. */
+    private static final String J2K_READER_SPI = "com.github.jaiimageio.jpeg2000.impl.J2KImageReaderSpi";
+    private static final String J2K_WRITER_SPI = "com.github.jaiimageio.jpeg2000.impl.J2KImageWriterSpi";
+
     public static synchronized void registerImageIoPlugins() {
         if (registered) {
             return;
@@ -66,7 +75,34 @@ public final class ImageCodec {
         if (ImageIO.getImageReadersByFormatName("JPEG2000").hasNext() == false) {
             ImageIO.scanForPlugins();
         }
+        // Service files under META-INF/services are often lost when jars are
+        // shaded or bundled into another application (B4J's jar packaging, for
+        // one, keeps a single provider file per category). The plugin classes
+        // can then be on the classpath yet invisible to ImageIO, which makes
+        // JPEG2000 encoding silently fall back to PNG. Register the SPIs
+        // directly so the plugin works regardless of packaging.
+        registerSpi(J2K_READER_SPI, ImageReaderSpi.class);
+        registerSpi(J2K_WRITER_SPI, ImageWriterSpi.class);
         registered = true;
+    }
+
+    /**
+     * Register the SPI class {@code className} unless an instance of the same
+     * class is already registered. Does nothing when the class is absent.
+     */
+    private static <T extends IIOServiceProvider> void registerSpi(String className, Class<T> category) {
+        try {
+            IIORegistry registry = IIORegistry.getDefaultInstance();
+            for (Iterator<T> it = registry.getServiceProviders(category, true); it.hasNext(); ) {
+                if (it.next().getClass().getName().equals(className)) {
+                    return;
+                }
+            }
+            T spi = category.cast(Class.forName(className).getDeclaredConstructor().newInstance());
+            registry.registerServiceProvider(spi, category);
+        } catch (ReflectiveOperationException | LinkageError e) {
+            // Plugin not on the classpath; callers report the missing support.
+        }
     }
 
     public static boolean hasJpeg2000Support() {
