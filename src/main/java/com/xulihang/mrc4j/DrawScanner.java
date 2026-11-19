@@ -58,7 +58,9 @@ final class DrawScanner {
                                    List<Draw> out, int depth) throws IOException {
         List<Object> tokens;
         try {
-            tokens = new PDFStreamParser(decoded(stream)).parse();
+            PDFStreamParser parser = new PDFStreamParser(decoded(stream));
+            parser.parse();
+            tokens = parser.getTokens();
         } catch (IOException e) {
             return;
         }
@@ -156,7 +158,9 @@ final class DrawScanner {
     static void removeFromStream(COSStream stream, COSName name) {
         List<Object> tokens;
         try {
-            tokens = new PDFStreamParser(decoded(stream)).parse();
+            PDFStreamParser parser = new PDFStreamParser(decoded(stream));
+            parser.parse();
+            tokens = parser.getTokens();
         } catch (IOException e) {
             return;
         }

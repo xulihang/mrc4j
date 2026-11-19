@@ -7,7 +7,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
-import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
@@ -94,7 +93,7 @@ public final class PdfCompressor {
 
     /** Compress {@code input} to {@code output}; returns per-image results. */
     public static List<ImageResult> compress(File input, File output, Options options) throws IOException {
-        try (PDDocument doc = Loader.loadPDF(input)) {
+        try (PDDocument doc = PDDocument.load(input)) {
             PdfCompressor c = new PdfCompressor(doc, options);
             List<ImageResult> results = c.compressAll();
             doc.save(output);
