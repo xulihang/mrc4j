@@ -1,205 +1,90 @@
 # mrc4j
 
-A Java library for building compact MRC (Mixed Raster Content) PDFs with crisp line art from page images.
+Java (17) port of the image compression part of
+[internetarchive/archive-pdf-tools](https://github.com/internetarchive/archive-pdf-tools)
+(`bin/compress-pdf-images` / `internetarchivepdf/mrc.py`), package
+`com.xulihang.mrc4j`.
 
-Instead of flattening a scanned page into one big color image, mrc4j splits it into three layers:
+Each image on each page of a PDF is split into three MRC layers, compressed,
+and put back where the original image was:
 
-- **background plate** — the page colors, with ink removed, downsampled and stored as JPEG by default;
-- **foreground plate** — the inked pixels, stored as JPEG 2000 (or JPEG);
-- **1-bit mask** — the ink footprint, stored as CCITT Group 4, used as the foreground's soft mask.
+* **mask** – 1-bit text/line-art mask (Sauvola binarisation + speckle removal)
+* **foreground** – masked pixels kept at full resolution, everything else
+  replaced by averaged surrounding content (so it compresses well)
+* **background** – inverted mask, downsampled (`--bg-downsample 3` by default)
 
-Binary line art keeps hard edges at every zoom level, while the color plates can be compressed
-aggressively — a common technique in scan-to-PDF pipelines. The layer split, G4 stencils and JPEG
-background follow the approach of [ifad/pdfbeads](https://github.com/ifad/pdfbeads).
+## Build
 
-## Requirements
-
-- Java 11+
-- OpenCV native libraries (bundled by `org.openpnp:opencv`, loaded automatically via
-  `nu.pattern.OpenCV.loadLocally()`)
-- No OCR required
-
-## Library usage
-
-```java
-import com.xulihang.mrc4j.MrcPdfBuilder;
-
-MrcPdfBuilder.Options options = new MrcPdfBuilder.Options();
-options.backgroundScale = 2.0;                 // half-resolution color plate
-options.backgroundJpegQuality = 0.6f;
-options.foregroundBitsPerPixel = 0.05;         // foreground only shows through the mask
-options.maskEncoding = MrcPdfBuilder.MaskEncoding.CCITT_G4;
-options.inkMode = MrcPdfBuilder.InkMode.AUTO;  // black ink needs no foreground plate
-
-try (MrcPdfBuilder builder = new MrcPdfBuilder(options)) {
-    builder.addPage(Path.of("page-001.png"), 460.8f, 708.2f); // page size in PDF points
-    builder.addPage(Path.of("page-002.png"), 460.8f, 708.2f);
-    builder.save(Path.of("out.pdf"));
-}
+```
+mvn -DskipTests package
 ```
 
-`addPage` returns the extracted `PageLayers` (including ink ratio and mean ink color), and
-`MrcPdfBuilder.extractLayers(image, options)` exposes the three layers if you want to inspect
-or re-encode them yourself.
+Produces `target/mrc4j-1.0-SNAPSHOT.jar` (self-contained; PDFBox, JAI
+JPEG2000 and jbig2 decoders are shaded in). Maven 3.6+ and JDK 17 are
+required.
 
-## Command line
+## Run
 
-```bash
-mvn compile exec:java -Dexec.mainClass=com.xulihang.mrc4j.MrcPdfFromImages \
-  -Dexec.args="<imagesDir> <outPdf> [sourcePdf|-] [dpi=300] [bgBpp=0.4] [fgBpp=0.05] [key=value...]"
+```
+java -cp target/mrc4j-1.0-SNAPSHOT.jar com.xulihang.mrc4j.PdfCompressor in.pdf out.pdf [options]
 ```
 
-When `sourcePdf` is given, page sizes are copied from that PDF exactly; otherwise they are
-derived from the image pixels and the DPI.
+The quickest self-contained run (no external encoders):
 
-Example (defaults, suitable for scans and comics):
-
-```bash
-mvn compile exec:java -Dexec.mainClass=com.xulihang.mrc4j.MrcPdfFromImages \
-  -Dexec.args="pages out.pdf - 300"
+```
+java -cp target/mrc4j-1.0-SNAPSHOT.jar com.xulihang.mrc4j.PdfCompressor \
+    in.pdf out.pdf --encoder java --no-jbig2
 ```
 
-Maximum-compatibility variant for viewers without a JPEG 2000 decoder (larger file):
+`--encoder java` uses the JAI JPEG2000 writer bundled in the jar; `--no-jbig2`
+uses a Flate-compressed 1-bit mask. With Kakadu and jbig2enc installed, omit
+both flags to use the same defaults as archive-pdf-tools.
 
-```bash
-mvn compile exec:java -Dexec.mainClass=com.xulihang.mrc4j.MrcPdfFromImages \
-  -Dexec.args="pages out.pdf - 300 bgFormat=jpeg fgFormat=jpeg fgQuality=0.5"
-```
+Options:
 
-### Lossless mode
+| option | meaning |
+| --- | --- |
+| `--encoder kakadu\|openjpeg\|grok\|java\|none` | JPEG2000 encoder; `java` is built in |
+| `--kdu PATH` | `kdu_compress` binary (Kakadu); default: `kdu_compress` from PATH |
+| `--jbig2 PATH` | `jbig2` (jbig2enc) binary; default: `jbig2` from PATH |
+| `--no-jbig2` | don't use jbig2enc (Flate 1-bit mask) |
+| `--fg-slope N` / `--bg-slope N` | Kakadu slope values (44500 / 44250) |
+| `--fg-rates R` / `--bg-rates R` | OpenJPEG/Grok compression ratios (750 / 500) |
+| `--fg-bpp N` / `--bg-bpp N` | Java (JAI) encoder rates in bits/pixel (0.4 / 0.2) |
+| `--bg-downsample N` | background downsample factor (3) |
+| `--dpi N` | fallback DPI for the Sauvola window (300) |
+| `--dump DIR` | write the MRC layers as PNG files |
+| `--debug` | per-image timings |
 
-Add `mode=lossless` to store every page as one full-resolution lossless JPEG 2000 image,
-with no downsampling and no MRC split. The result is bit-exact: decoding the page returns the
-source pixels unchanged.
+With `--encoder none` the foreground/background are stored as Flate-compressed
+8-bit images (usage fallback) instead of JPEG2000.
 
-```bash
-mvn compile exec:java -Dexec.mainClass=com.xulihang.mrc4j.MrcPdfFromImages \
-  -Dexec.args="pages out.pdf - 300 mode=lossless"
-```
+Other entry points:
 
-Lossless JPX is typically 40–60% smaller than the source PNGs and needs a JPEG 2000 decoder
-in the viewer. MRC mode (the default) is still much smaller and is intended for viewing.
+* `com.xulihang.mrc4j.ComponentDump <image> <outDir> [dpi]` – dump the
+  mask/foreground/background of a single image.
 
-### Text-mask mode (ImageTrans intermediates)
+## Status
 
-If you have [ImageTrans](https://www.basiccat.org/imagetrans/) intermediates for the pages, mrc4j
-can use them to keep text perfectly crisp while compressing the background hard. For every
-`page-001.png`, put these two files in an intermediate directory:
+Working: PDF parsing, image extraction/replacement, MRC decomposition,
+Sauvola thresholding, layer optimising, background downsampling, JBIG2 /
+Kakadu / OpenJPEG / Grok / Java-JAI encoders, Flate fallbacks.
 
-- `page-001.png-mask.png` — text pixel mask (opaque text pixels, transparent elsewhere);
-- `page-001.png-text-removed.png` — the page with text removed/inpainted.
+Fixed (2026-11-19):
 
-Then run:
+* Replacement images are placed with the original image's CTM instead of a
+  reconstructed flipped rectangle, so pages are no longer upside down.
+* `ImageCodec.fromBufferedImage` now returns RGB for BGR/ABGR
+  `BufferedImage`s (it previously swapped red and blue); the PDF layers
+  therefore keep the original colours.
+* The shade plugin merges `META-INF/services` ImageIO registrations, so the
+  JPEG2000 reader/writer is available from the shaded jar as well.
+* Rewritten page content streams drop the original `/FlateDecode` filter
+  before the uncompressed tokens are written; `qpdf --check` and PDFBox now
+  read the result without stream errors.
+* Added a built-in `--encoder java` (JAI JPEG2000) so the tool runs without
+  Kakadu/OpenJPEG/Grok.
 
-```bash
-mvn compile exec:java -Dexec.mainClass=com.xulihang.mrc4j.MrcPdfFromImages \
-  -Dexec.args="pages out.pdf - 300 mode=textmask intermediate=path/to/intermediateResults bgBpp=0.4"
-```
-
-The text-free image becomes the background plate (full resolution, JPEG 2000 by default), the
-original text pixels selected by the mask become a lossless JPEG 2000 foreground with the mask
-as its G4 soft mask, and the background can be compressed much harder without ever blurring
-text. `textMaskDilation` (default 1) widens the mask slightly to include antialiased edges.
-
-Add `bgLossless=1` for a bit-exact page: the background is stored as lossless JPEG 2000, the
-text foreground is lossless, and the coverage mask is extended by every pixel that differs
-between the original and the text-removed image. The reconstructed page is then pixel-identical
-to the source (the file is naturally much larger than the lossy textmask output).
-
-### Stencil mode (DjVu/pdfbeads-style)
-
-`mode=stencil` builds a two-layer page:
-
-- **foreground** — 1-bit stencils: high-contrast neutral line art and black text in a black
-  stencil, light text in a white stencil, both CCITT G4 (the pure-Java equivalent of JBIG2;
-  pdfbeads falls back to G4 too, and on these pages it was even smaller than JBIG2);
-- **background** — a full-resolution JPEG 2000 color plate. Large dark areas stay in the color
-  plate; only strongly local-contrast strokes go to the stencil.
-
-With ImageTrans intermediates it uses the text mask and text-removed image, giving a clean
-text-free background and separate white-text handling:
-
-```bash
-mvn compile exec:java -Dexec.mainClass=com.xulihang.mrc4j.MrcPdfFromImages \
-  -Dexec.args="pages out.pdf - 300 mode=stencil intermediate=path/to/intermediateResults bgBpp=0.4"
-```
-
-**No intermediates required.** If `intermediate` is omitted, the background is the original
-image with the stencil areas cleared by a median blur, and the black stencil is built from the
-original. Light text cannot be separated in this standalone mode, so it stays in the color
-background:
-
-```bash
-mvn compile exec:java -Dexec.mainClass=com.xulihang.mrc4j.MrcPdfFromImages \
-  -Dexec.args="pages out.pdf - 300 mode=stencil bgBpp=0.4"
-```
-
-Text is crisp with no lossy color plate around it, and the color background carries the
-halftones and dark areas. `stencilContrast` (default 50) controls how much darker than its
-surroundings a pixel must be to enter the line-art stencil; raise it to keep only stronger
-outlines. `stencilMaxS` (default 90) keeps saturated dark colors out of the black stencil.
-
-## Options
-
-Positional arguments remain `sourcePdf`, `dpi`, `bgBpp`, `fgBpp`; anything of the form
-`key=value` after them overrides the corresponding option.
-
-| Option | Default | Meaning |
-|---|---|---|
-| `mode` | `mrc` | `mrc`, `lossless`, `textmask`, or `stencil` |
-| `intermediate` | — | ImageTrans intermediate directory for `mode=textmask` / `mode=stencil` |
-| `textMaskDilation` | 1 | Mask dilation in pixels for textmask/stencil modes |
-| `textFgBpp` | 0.2 | Textmask foreground JPX rate; the smaller of lossless and this rate is kept (0 = lossless only) |
-| `bgLossless` | false | Textmask: lossless background + lossless text fg (bit-exact; requires `bgScale=1`) |
-| `stencilContrast` | 50 | Stencil: adaptive threshold constant for neutral line art |
-| `stencilMaxS` | 90 | Stencil: max HSV saturation for black ink |
-| `stencilDilation` | 0 | Stencil: dilation of the black line-art stencil |
-| `stencilClear` | false | Stencil: blur/clear the background under the stencils |
-| `stencilClearDilation` | 1 | Stencil: clearing dilation when `stencilClear=1` |
-| `textDiffMargin` | 8 | Stencil: minimum luma change to treat a pixel as text |
-| `textBinThreshold` | 128 | Stencil: luma threshold splitting black/white text |
-| `thresholdBlockSize` / `blockSize` | 31 | Adaptive threshold window (odd pixels) |
-| `thresholdC` | 10.0 | Adaptive threshold constant |
-| `backgroundBlurKernel` / `bgBlur` | 9 | Median blur used to fill ink areas in the background plate |
-| `maskOpenKernel` / `maskOpen` | 3 | Morphological opening kernel for the ink mask; 0 disables it |
-| `backgroundClearDilation` / `clearDilation` | 3 | Mask dilation when clearing ink from the background |
-| `maskEncoding` / `mask` | `CCITT_G4` | `g4` or `flate` encoding for the 1-bit mask |
-| `backgroundFormat` / `bgFormat` | `JPEG` | `jpeg` or `jpx` |
-| `backgroundScale` / `bgScale` | 2.0 | Background downsampling factor (≥ 1); mask/foreground stay full-res |
-| `backgroundJpegQuality` / `bgQuality` | 0.6 | JPEG quality for the background |
-| `backgroundBitsPerPixel` / `bgBpp` | 0.4 | JPEG 2000 rate when `bgFormat=jpx` |
-| `foregroundFormat` / `fgFormat` | `JPX` | `jpx` or `jpeg` |
-| `foregroundBitsPerPixel` / `fgBpp` | 0.05 | JPEG 2000 rate for the foreground |
-| `foregroundJpegQuality` / `fgQuality` | 0.7 | JPEG quality when `fgFormat=jpeg` |
-| `inkMode` / `fgMode` | `AUTO` | `auto`, `image`, or `stencil` |
-| `stencilMaxSaturation` / `stencilSat` | 24 | AUTO: max mean HSV saturation of ink to use a black stencil |
-| `stencilMaxValue` / `stencilVal` | 110 | AUTO: max mean HSV value of ink to use a black stencil |
-
-Lower rates/qualities produce smaller files; higher ones preserve more color fidelity in flat
-and halftone areas.
-
-### Why the defaults look like this
-
-- **CCITT G4 mask** — a binary text/line-art mask compresses several times smaller as G4 than
-  as Flate, and every PDF reader supports it.
-- **Downsampled JPEG background** — the background contains no line art (ink was removed), so
-  halving its resolution is barely visible while cutting its bytes by roughly 3–4×.
-- **Low-rate JPEG 2000 foreground** — the foreground plate is only ever visible through the
-  binary mask, so it tolerates much lower rates than a normal photo.
-- **AUTO stencil** — when the ink is dark and nearly neutral (black text), `AUTO` paints the
-  G4 mask directly in black and omits the foreground plate entirely. Colored pages keep the
-  foreground plate.
-
-## Notes
-
-- JPEG 2000 is the default for the foreground plate. Viewers without a JPX decoder
-  (`jai-imageio-jpeg2000` for PDFBox-based rendering) should use `fgFormat=jpeg` or
-  `fgMode=stencil`.
-- Pure Java has no JBIG2 encoder. If you have `jbig2enc`, its output can be embedded the same
-  way (raw stream + `/JBIG2Decode`) to shrink the mask further than G4.
-- Rendering above the page's native resolution does not add detail; feed mrc4j images at their
-  native scan DPI.
-
-## License
-
-Apache License 2.0.
+In the page-6 test fixture used during the port (8.4 MB), the result is about
+**0.49 MB** with `--encoder java --no-jbig2`; the text/line art stays crisp and
+the page keeps its original colours and orientation.
