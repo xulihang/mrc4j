@@ -27,7 +27,8 @@ import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
  *
  *   --kdu PATH          kdu_compress binary (default: from PATH)
  *   --jbig2 PATH        jbig2 binary (default: from PATH)
- *   --no-jbig2          do not use jbig2enc; masks are embedded as Flate 1-bit
+ *   --no-jbig2          do not use jbig2enc; masks use --mask-compression
+ *   --mask-compression  g4 | flate | jbig2 (fallback G4)
  *   --fg-slope N        Kakadu foreground slope (default 44500)
  *   --bg-slope N        Kakadu background slope (default 44250)
  *   --fg-rates R        OpenJPEG/Grok foreground compression ratio (default 750)
@@ -62,10 +63,15 @@ public final class PdfCompressor {
         public boolean debug = false;
     }
 
+    /** Mask codec used when jbig2enc is not available. */
+    public enum MaskFallback { G4, FLATE }
+
     /** Compression configuration. */
     public static final class Options {
         public String jbig2Command = "jbig2";
         public boolean useJbig2 = true;
+        /** Codec for the mask when JBIG2 is unavailable/disabled. */
+        public MaskFallback maskFallback = MaskFallback.G4;
         public Jpeg2000Options jpeg2000 = new Jpeg2000Options();
         public MrcDecomposer.Options mrc = MrcDecomposer.Options.defaults();
         public File dumpDir = null;
@@ -84,12 +90,14 @@ public final class PdfCompressor {
         private final int fgHeight;
         private final Mask mask;
         private final byte[] maskJbig2;
+        private final MaskFallback maskFallback;
         private final byte[] bgJp2;
         private final byte[] fgJp2;
 
         public ImageResult(String name, int pageNumber, int width, int height,
                            int bgWidth, int bgHeight, int fgWidth, int fgHeight,
-                           Mask mask, byte[] maskJbig2, byte[] bgJp2, byte[] fgJp2) {
+                           Mask mask, byte[] maskJbig2, MaskFallback maskFallback,
+                           byte[] bgJp2, byte[] fgJp2) {
             this.name = name;
             this.pageNumber = pageNumber;
             this.width = width;
@@ -100,6 +108,7 @@ public final class PdfCompressor {
             this.fgHeight = fgHeight;
             this.mask = mask;
             this.maskJbig2 = maskJbig2;
+            this.maskFallback = maskFallback;
             this.bgJp2 = bgJp2;
             this.fgJp2 = fgJp2;
         }
@@ -142,6 +151,10 @@ public final class PdfCompressor {
 
         public byte[] maskJbig2() {
             return maskJbig2;
+        }
+
+        public MaskFallback maskFallback() {
+            return maskFallback;
         }
 
         public byte[] bgJp2() {
@@ -234,7 +247,7 @@ public final class PdfCompressor {
         return new ImageResult(name, pageNumber, w, h,
                 c.background.getWidth(), c.background.getHeight(),
                 c.foreground.getWidth(), c.foreground.getHeight(),
-                c.mask, maskJbig2, bg, fg);
+                c.mask, maskJbig2, options.maskFallback, bg, fg);
     }
 
     /**
@@ -274,6 +287,17 @@ public final class PdfCompressor {
                 case "--normal-jbig2":
                     o.useJbig2 = true;
                     break;
+                case "--mask-compression": {
+                    String mask = args[++i].toLowerCase(Locale.ROOT);
+                    if ("jbig2".equals(mask)) {
+                        o.useJbig2 = true;
+                    } else {
+                        o.useJbig2 = false;
+                        o.maskFallback = "flate".equals(mask)
+                                ? MaskFallback.FLATE : MaskFallback.G4;
+                    }
+                    break;
+                }
                 case "--fg-slope":
                     o.jpeg2000.fgSlope = Integer.parseInt(args[++i]);
                     break;
@@ -327,9 +351,11 @@ public final class PdfCompressor {
         long inSize = in.length();
         long outSize = out.length();
         for (ImageResult r : results) {
+            String maskKind = r.jbig2() ? "JBIG2 mask"
+                    : (r.maskFallback() == MaskFallback.G4 ? "G4 mask" : "Flate mask");
             System.out.printf(Locale.ROOT, "page %d %s: %dx%d -> bg %dx%d + fg %dx%d (%s)%n",
                     r.pageNumber(), r.name(), r.width(), r.height(), r.bgWidth(), r.bgHeight(),
-                    r.fgWidth(), r.fgHeight(), r.jbig2() ? "JBIG2 mask" : "Flate 1-bit mask");
+                    r.fgWidth(), r.fgHeight(), maskKind);
         }
         System.out.printf(Locale.ROOT, "compressed %d image(s) in %.2fs: %d -> %d bytes%n",
                 results.size(), (t1 - t0) / 1000.0, inSize, outSize);

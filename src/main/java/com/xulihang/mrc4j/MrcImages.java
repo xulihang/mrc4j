@@ -1,10 +1,15 @@
 package com.xulihang.mrc4j;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 
+import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSInteger;
 import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSStream;
+import org.apache.pdfbox.filter.FilterFactory;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.common.PDStream;
@@ -92,23 +97,54 @@ final class MrcImages {
         mask.getCOSObject().setItem(COSName.BITS_PER_COMPONENT, COSInteger.ONE);
         mask.getCOSObject().setItem(COSName.COLORSPACE, PDDeviceGray.INSTANCE);
         mask.getCOSObject().removeItem(COSName.LENGTH);
-        if (r.mask() != null && r.maskJbig2() == null) {
-            // Without jbig2enc the mask is stored as a Flate-compressed 1-bit
-            // image: bigger than JBIG2 but supported everywhere. (The Python
-            // tool's PNG fallback ends up as CCITT G4 in the PDF.)
-            mask.getCOSObject().setItem(COSName.FILTER, COSName.FLATE_DECODE);
-            try (var os = mask.getCOSObject().createRawOutputStream()) {
-                os.write(ImageCodec.deflate(Png1Bit.packBits(r.mask())));
-            }
-        } else if (r.maskJbig2() != null) {
+        if (r.maskJbig2() != null) {
             mask.getCOSObject().setItem(COSName.FILTER, COSName.JBIG2_DECODE);
             try (var os = mask.getCOSObject().createRawOutputStream()) {
                 os.write(r.maskJbig2());
+            }
+        } else if (r.mask() != null
+                && r.maskFallback() == PdfCompressor.MaskFallback.G4) {
+            writeG4(mask.getCOSObject(), r.mask());
+        } else if (r.mask() != null) {
+            mask.getCOSObject().setItem(COSName.FILTER, COSName.FLATE_DECODE);
+            try (var os = mask.getCOSObject().createRawOutputStream()) {
+                os.write(ImageCodec.deflate(Png1Bit.packBits(r.mask())));
             }
         } else {
             // No mask at all: fully opaque
             mask.getCOSObject().setItem(COSName.FILTER, COSName.FLATE_DECODE);
         }
         return mask;
+    }
+
+    /**
+     * Embed the 1-bit mask as CCITT Group 4. This is the pure-Java equivalent
+     * of pdfbeads' / the archive tool's JBIG2 or CCITT mask and is much smaller
+     * than a Flate-compressed bitmap.
+     */
+    private static void writeG4(COSStream cos, Mask mask) throws IOException {
+        int width = mask.getWidth();
+        int height = mask.getHeight();
+        COSDictionary encodeParams = new COSDictionary();
+        encodeParams.setInt(COSName.COLUMNS, width);
+        encodeParams.setInt(COSName.ROWS, height);
+        encodeParams.setInt(COSName.K, -1);
+        ByteArrayOutputStream encoded = new ByteArrayOutputStream();
+        FilterFactory.INSTANCE.getFilter(COSName.CCITTFAX_DECODE)
+                .encode(new ByteArrayInputStream(Png1Bit.packBits(mask)), encoded,
+                        encodeParams, 0);
+
+        COSDictionary decodeParams = new COSDictionary();
+        decodeParams.setInt(COSName.K, -1);
+        decodeParams.setInt(COSName.COLUMNS, width);
+        decodeParams.setInt(COSName.ROWS, height);
+        // Mask bits are 1 for text; as an SMask that must decode to white
+        // (opaque).
+        decodeParams.setBoolean(COSName.BLACK_IS_1, true);
+        cos.setItem(COSName.FILTER, COSName.CCITTFAX_DECODE);
+        cos.setItem(COSName.DECODE_PARMS, decodeParams);
+        try (var os = cos.createRawOutputStream()) {
+            os.write(encoded.toByteArray());
+        }
     }
 }

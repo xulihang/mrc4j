@@ -37,8 +37,9 @@ java -cp target/mrc4j-1.0-SNAPSHOT.jar com.xulihang.mrc4j.PdfCompressor \
 ```
 
 `--encoder java` uses the JAI JPEG2000 writer bundled in the jar; `--no-jbig2`
-uses a Flate-compressed 1-bit mask. With Kakadu and jbig2enc installed, omit
-both flags to use the same defaults as archive-pdf-tools.
+uses a CCITT Group 4 mask (pass `--mask-compression flate` for Flate). With
+Kakadu and jbig2enc installed, omit both flags to use the same defaults as
+archive-pdf-tools.
 
 Options:
 
@@ -47,7 +48,8 @@ Options:
 | `--encoder kakadu\|openjpeg\|grok\|java\|none` | JPEG2000 encoder; `java` is built in |
 | `--kdu PATH` | `kdu_compress` binary (Kakadu); default: `kdu_compress` from PATH |
 | `--jbig2 PATH` | `jbig2` (jbig2enc) binary; default: `jbig2` from PATH |
-| `--no-jbig2` | don't use jbig2enc (Flate 1-bit mask) |
+| `--no-jbig2` | don't use jbig2enc; use the mask fallback |
+| `--mask-compression g4\|flate\|jbig2` | mask codec when JBIG2 is unavailable (default `g4`) |
 | `--fg-slope N` / `--bg-slope N` | Kakadu slope values (44500 / 44250) |
 | `--fg-rates R` / `--bg-rates R` | OpenJPEG/Grok compression ratios (750 / 500) |
 | `--fg-bpp N` / `--bg-bpp N` | Java (JAI) encoder rates in bits/pixel (0.4 / 0.2) |
@@ -68,7 +70,7 @@ Other entry points:
 
 Working: PDF parsing, image extraction/replacement, MRC decomposition,
 Sauvola thresholding, layer optimising, background downsampling, JBIG2 /
-Kakadu / OpenJPEG / Grok / Java-JAI encoders, Flate fallbacks.
+CCITT G4 / Kakadu / OpenJPEG / Grok / Java-JAI encoders, Flate fallbacks.
 
 Fixed (2026-11-19):
 
@@ -84,7 +86,11 @@ Fixed (2026-11-19):
   read the result without stream errors.
 * Added a built-in `--encoder java` (JAI JPEG2000) so the tool runs without
   Kakadu/OpenJPEG/Grok.
+* The mask now falls back to CCITT Group 4 (pure Java) instead of Flate when
+  jbig2enc is unavailable.
 
-In the page-6 test fixture used during the port (8.4 MB), the result is about
-**0.49 MB** with `--encoder java --no-jbig2`; the text/line art stays crisp and
-the page keeps its original colours and orientation.
+In the page-6 test fixture used during the port (8.4 MB), the default
+self-contained result is about **0.41 MB** with `--encoder java --no-jbig2`;
+`--fg-bpp 0.25 --bg-bpp 0.1` brings it to about **0.29 MB** with slightly
+softer artwork. The text/line art stays crisp and the page keeps its original
+colours and orientation.
