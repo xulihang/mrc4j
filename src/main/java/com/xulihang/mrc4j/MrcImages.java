@@ -22,6 +22,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSInteger;
@@ -67,12 +68,12 @@ final class MrcImages {
 
     /** The background layer as an image XObject (for direct drawing). */
     static PDImageXObject background(PDDocument doc, PdfCompressor.ImageResult r) throws IOException {
-        return image(doc, r.bgJp2(), r.bgWidth(), r.bgHeight());
+        return image(doc, r.bgJp2(), r.bgWidth(), r.bgHeight(), r.bgChannels());
     }
 
     /** The foreground layer with the mask as its /SMask (for direct drawing). */
     static PDImageXObject foreground(PDDocument doc, PdfCompressor.ImageResult r) throws IOException {
-        PDImageXObject img = image(doc, r.fgJp2(), r.fgWidth(), r.fgHeight());
+        PDImageXObject img = image(doc, r.fgJp2(), r.fgWidth(), r.fgHeight(), r.fgChannels());
         img.getCOSObject().setItem(COSName.SMASK, mask(doc, r));
         return img;
     }
@@ -86,59 +87,60 @@ final class MrcImages {
         return dict;
     }
 
-    private static PDImageXObject image(PDDocument doc, byte[] jp2, int w, int h) throws IOException {
-        PDImageXObject img = new PDImageXObject(new PDStream(doc, java.io.InputStream.nullInputStream()),
-                new PDResources());
+    /** A new image XObject whose (still empty) data stream is ready to write. */
+    private static PDImageXObject newImage(PDDocument doc) throws IOException {
+        return new PDImageXObject(new PDStream(doc, InputStream.nullInputStream()), new PDResources());
+    }
+
+    private static void write(PDImageXObject img, byte[] data) throws IOException {
+        img.getCOSObject().removeItem(COSName.LENGTH);
+        try (OutputStream os = img.getCOSObject().createRawOutputStream()) {
+            os.write(data);
+        }
+    }
+
+    private static PDImageXObject image(PDDocument doc, byte[] jp2, int w, int h, int channels) throws IOException {
+        PDImageXObject img = newImage(doc);
         // PDImageXObject(PDStream, ...) leaves Width/Height unset; fill the
         // standard entries explicitly.
         img.getCOSObject().setInt(COSName.WIDTH, w);
         img.getCOSObject().setInt(COSName.HEIGHT, h);
-        img.getCOSObject().setItem(COSName.BITS_PER_COMPONENT, org.apache.pdfbox.cos.COSInteger.get(8));
-        img.getCOSObject().setItem(COSName.COLORSPACE, PDDeviceRGB.INSTANCE);
+        img.getCOSObject().setItem(COSName.BITS_PER_COMPONENT, COSInteger.get(8));
+        // Background/foreground are DeviceGray (1 component) or DeviceRGB (3).
+        img.getCOSObject().setItem(COSName.COLORSPACE, channels > 1 ? PDDeviceRGB.INSTANCE : PDDeviceGray.INSTANCE);
         if (ImageCodec.isJpeg2000(jp2)) {
             img.getCOSObject().setItem(COSName.FILTER, COSName.JPX_DECODE);
+            write(img, jp2);
         } else if (ImageCodec.isPng(jp2)) {
             img.getCOSObject().setItem(COSName.FILTER, COSName.FLATE_DECODE);
             var parms = new org.apache.pdfbox.cos.COSDictionary();
             parms.setInt(COSName.PREDICTOR, 12);
-            parms.setInt(COSName.COLORS, 3);
+            parms.setInt(COSName.COLORS, channels);
             parms.setInt(COSName.BITS_PER_COMPONENT, 8);
             parms.setInt(COSName.COLUMNS, w);
             img.getCOSObject().setItem(COSName.DECODE_PARMS, parms);
-            try (var os = img.getCOSObject().createRawOutputStream()) {
-                os.write(ImageCodec.pngToUpPredictedZlib(jp2));
-            }
-            return img;
+            write(img, ImageCodec.pngToUpPredictedZlib(jp2));
         } else {
             throw new IOException("unsupported layer encoding");
-        }
-        img.getCOSObject().removeItem(COSName.LENGTH);
-        try (var os = img.getCOSObject().createRawOutputStream()) {
-            os.write(jp2);
         }
         return img;
     }
 
     private static PDImageXObject mask(PDDocument doc, PdfCompressor.ImageResult r) throws IOException {
-        PDImageXObject mask = new PDImageXObject(new PDStream(doc, InputStream.nullInputStream()), new PDResources());
+        PDImageXObject mask = newImage(doc);
         mask.getCOSObject().setInt(COSName.WIDTH, r.width());
         mask.getCOSObject().setInt(COSName.HEIGHT, r.height());
         mask.getCOSObject().setItem(COSName.BITS_PER_COMPONENT, COSInteger.ONE);
         mask.getCOSObject().setItem(COSName.COLORSPACE, PDDeviceGray.INSTANCE);
-        mask.getCOSObject().removeItem(COSName.LENGTH);
         if (r.maskJbig2() != null) {
             mask.getCOSObject().setItem(COSName.FILTER, COSName.JBIG2_DECODE);
-            try (var os = mask.getCOSObject().createRawOutputStream()) {
-                os.write(r.maskJbig2());
-            }
+            write(mask, r.maskJbig2());
         } else if (r.mask() != null
                 && r.maskFallback() == PdfCompressor.MaskFallback.G4) {
-            writeG4(mask.getCOSObject(), r.mask());
+            writeG4(doc, mask, r.mask());
         } else if (r.mask() != null) {
             mask.getCOSObject().setItem(COSName.FILTER, COSName.FLATE_DECODE);
-            try (var os = mask.getCOSObject().createRawOutputStream()) {
-                os.write(ImageCodec.deflate(Png1Bit.packBits(r.mask())));
-            }
+            write(mask, ImageCodec.deflate(Png1Bit.packBits(r.mask())));
         } else {
             // No mask at all: fully opaque
             mask.getCOSObject().setItem(COSName.FILTER, COSName.FLATE_DECODE);
@@ -151,7 +153,7 @@ final class MrcImages {
      * of pdfbeads' / the archive tool's JBIG2 or CCITT mask and is much smaller
      * than a Flate-compressed bitmap.
      */
-    private static void writeG4(COSStream cos, Mask mask) throws IOException {
+    private static void writeG4(PDDocument doc, PDImageXObject img, Mask mask) throws IOException {
         int width = mask.getWidth();
         int height = mask.getHeight();
         COSDictionary encodeParams = new COSDictionary();
@@ -170,10 +172,8 @@ final class MrcImages {
         // Mask bits are 1 for text; as an SMask that must decode to white
         // (opaque).
         decodeParams.setBoolean(COSName.BLACK_IS_1, true);
-        cos.setItem(COSName.FILTER, COSName.CCITTFAX_DECODE);
-        cos.setItem(COSName.DECODE_PARMS, decodeParams);
-        try (var os = cos.createRawOutputStream()) {
-            os.write(encoded.toByteArray());
-        }
+        img.getCOSObject().setItem(COSName.FILTER, COSName.CCITTFAX_DECODE);
+        img.getCOSObject().setItem(COSName.DECODE_PARMS, decodeParams);
+        write(img, encoded.toByteArray());
     }
 }

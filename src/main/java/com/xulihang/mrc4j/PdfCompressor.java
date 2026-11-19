@@ -106,6 +106,8 @@ public final class PdfCompressor {
         private final int bgHeight;
         private final int fgWidth;
         private final int fgHeight;
+        private final int bgChannels;
+        private final int fgChannels;
         private final Mask mask;
         private final byte[] maskJbig2;
         private final MaskFallback maskFallback;
@@ -114,6 +116,7 @@ public final class PdfCompressor {
 
         public ImageResult(String name, int pageNumber, int width, int height,
                            int bgWidth, int bgHeight, int fgWidth, int fgHeight,
+                           int bgChannels, int fgChannels,
                            Mask mask, byte[] maskJbig2, MaskFallback maskFallback,
                            byte[] bgJp2, byte[] fgJp2) {
             this.name = name;
@@ -124,6 +127,8 @@ public final class PdfCompressor {
             this.bgHeight = bgHeight;
             this.fgWidth = fgWidth;
             this.fgHeight = fgHeight;
+            this.bgChannels = bgChannels;
+            this.fgChannels = fgChannels;
             this.mask = mask;
             this.maskJbig2 = maskJbig2;
             this.maskFallback = maskFallback;
@@ -161,6 +166,14 @@ public final class PdfCompressor {
 
         public int fgHeight() {
             return fgHeight;
+        }
+
+        public int bgChannels() {
+            return bgChannels;
+        }
+
+        public int fgChannels() {
+            return fgChannels;
         }
 
         public Mask mask() {
@@ -228,7 +241,7 @@ public final class PdfCompressor {
     /** Decompose/encode one PDImageXObject (used by the per-image facade). */
     static ImageResult encodePageImage(PDImageXObject image, int pageNumber, String name,
                                        Options options) throws IOException {
-        PixelBuffer pixels = ImageCodec.fromBufferedImage(image.getImage());
+        PixelBuffer pixels = ImageCodec.fromBufferedImage(ImageCodec.getImage(image));
         return encodePixels(pixels, image.getWidth(), image.getHeight(), pageNumber, name, options);
     }
 
@@ -249,12 +262,18 @@ public final class PdfCompressor {
             }
         }
 
-        byte[] bg = Jpeg2000Encoder.isAvailable(options.jpeg2000)
-                ? Jpeg2000Encoder.encode(c.background, 'b', options.jpeg2000)
-                : ImageCodec.encodePng(c.background);
-        byte[] fg = Jpeg2000Encoder.isAvailable(options.jpeg2000)
-                ? Jpeg2000Encoder.encode(c.foreground, 'f', options.jpeg2000)
-                : ImageCodec.encodePng(c.foreground);
+        // The Java (JAI) encoder always writes RGB: per-component rates on a
+        // single-component (gray) codestream come out far too coarse.
+        boolean java = options.jpeg2000.encoder == Jpeg2000Options.Encoder.JAVA;
+        PixelBuffer bgPixels = java ? c.background.toRgb() : c.background;
+        PixelBuffer fgPixels = java ? c.foreground.toRgb() : c.foreground;
+        boolean jp2 = Jpeg2000Encoder.isAvailable(options.jpeg2000);
+        byte[] bg = jp2
+                ? Jpeg2000Encoder.encode(bgPixels, 'b', options.jpeg2000)
+                : ImageCodec.encodePng(bgPixels);
+        byte[] fg = jp2
+                ? Jpeg2000Encoder.encode(fgPixels, 'f', options.jpeg2000)
+                : ImageCodec.encodePng(fgPixels);
         long t2 = System.currentTimeMillis();
 
         if (options.dumpDir != null) {
@@ -272,8 +291,9 @@ public final class PdfCompressor {
                     c.background.getWidth(), c.background.getHeight(), t1 - t0, t2 - t1);
         }
         return new ImageResult(name, pageNumber, w, h,
-                c.background.getWidth(), c.background.getHeight(),
-                c.foreground.getWidth(), c.foreground.getHeight(),
+                bgPixels.getWidth(), bgPixels.getHeight(),
+                fgPixels.getWidth(), fgPixels.getHeight(),
+                bgPixels.getChannels(), fgPixels.getChannels(),
                 c.mask, maskJbig2, options.maskFallback, bg, fg);
     }
 

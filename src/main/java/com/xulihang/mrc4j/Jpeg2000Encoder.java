@@ -75,21 +75,45 @@ public final class Jpeg2000Encoder {
     private static byte[] encodeJava(PixelBuffer img, char type,
                                      PdfCompressor.Jpeg2000Options o) throws IOException {
         ImageCodec.registerImageIoPlugins();
-        Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName("jpeg2000");
-        if (!writers.hasNext()) {
+        if (!ImageIO.getImageWritersByFormatName("jpeg2000").hasNext()) {
             throw new IOException("No JPEG2000 ImageIO writer; "
                     + "add com.github.jai-imageio:jai-imageio-jpeg2000");
         }
-        ImageWriter writer = writers.next();
         double bpp = type == 'f' ? o.fgBitsPerPixel : o.bgBitsPerPixel;
         BufferedImage bi = ImageCodec.toBufferedImage(img);
+        try {
+            return writeJava(bi, bpp, false);
+        } catch (IllegalArgumentException e) {
+            // "Overall target bitrate too low, given the current bit stream
+            // header overhead": the code-block headers do not fit into the
+            // budget of tiny (fast mode) images. Store losslessly instead.
+            if (e.getMessage() == null || !e.getMessage().contains("header overhead")) {
+                throw e;
+            }
+            return writeJava(bi, bpp, true);
+        }
+    }
+
+    /**
+     * One JPEG2000 write with a fresh writer. {@code lossless} uses the
+     * reversible 5/3 filter.
+     */
+    private static byte[] writeJava(BufferedImage bi, double bpp, boolean lossless) throws IOException {
+        ImageWriter writer = ImageIO.getImageWritersByFormatName("jpeg2000").next();
         try (ByteArrayOutputStream bos = new ByteArrayOutputStream();
              ImageOutputStream ios = ImageIO.createImageOutputStream(bos)) {
             writer.setOutput(ios);
             J2KImageWriteParam param = new J2KImageWriteParam();
             param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
-            param.setLossless(false);
-            param.setEncodingRate(bpp);
+            if (lossless) {
+                param.setLossless(true);
+                // The default filter is the irreversible 9/7; lossless needs
+                // the reversible 5/3 one.
+                param.setFilter(J2KImageWriteParam.FILTER_53);
+            } else {
+                param.setLossless(false);
+                param.setEncodingRate(bpp);
+            }
             writer.write(null, new IIOImage(bi, null, null), param);
             ios.flush();
             return bos.toByteArray();

@@ -29,8 +29,17 @@ import java.awt.image.WritableRaster;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Locale;
+
+import org.apache.pdfbox.cos.COSArray;
+import org.apache.pdfbox.cos.COSBase;
+import org.apache.pdfbox.cos.COSDictionary;
+import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
@@ -72,15 +81,22 @@ public final class ImageCodec {
         }
         // SPI registration happens automatically when the jars are on the
         // classpath; force ImageIO to (re)scan if nothing is registered yet.
-        if (ImageIO.getImageReadersByFormatName("JPEG2000").hasNext() == false) {
-            ImageIO.scanForPlugins();
+        try {
+            if (!ImageIO.getImageReadersByFormatName("JPEG2000").hasNext()
+                    || !ImageIO.getImageWritersByFormatName("JPEG2000").hasNext()) {
+                ImageIO.scanForPlugins();
+            }
+        } catch (RuntimeException | LinkageError e) {
+            // e.g. ServiceConfigurationError for a provider entry pointing at
+            // a class the (partially bundled) build does not contain
         }
         // Service files under META-INF/services are often lost when jars are
         // shaded or bundled into another application (B4J's jar packaging, for
         // one, keeps a single provider file per category). The plugin classes
         // can then be on the classpath yet invisible to ImageIO, which makes
-        // JPEG2000 encoding silently fall back to PNG. Register the SPIs
-        // directly so the plugin works regardless of packaging.
+        // JPEG2000 encoding silently fall back to PNG and PDFBox's JPEG2000
+        // reader fail. Register the SPIs directly so the plugin works
+        // regardless of packaging.
         registerSpi(J2K_READER_SPI, ImageReaderSpi.class);
         registerSpi(J2K_WRITER_SPI, ImageWriterSpi.class);
         registered = true;
@@ -92,17 +108,37 @@ public final class ImageCodec {
      */
     private static <T extends IIOServiceProvider> void registerSpi(String className, Class<T> category) {
         try {
-            IIORegistry registry = IIORegistry.getDefaultInstance();
-            for (Iterator<T> it = registry.getServiceProviders(category, true); it.hasNext(); ) {
+            for (Iterator<T> it = getServiceProviders(category); it.hasNext(); ) {
                 if (it.next().getClass().getName().equals(className)) {
                     return;
                 }
             }
             T spi = category.cast(Class.forName(className).getDeclaredConstructor().newInstance());
-            registry.registerServiceProvider(spi, category);
-        } catch (ReflectiveOperationException | LinkageError e) {
+            IIORegistry.getDefaultInstance().registerServiceProvider(spi, category);
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError e) {
             // Plugin not on the classpath; callers report the missing support.
         }
+    }
+
+    /**
+     * Registered SPIs of {@code category}. A broken service file under
+     * META-INF/services makes ImageIO fail lazily, one bad provider at a
+     * time, so keep querying past the failures.
+     */
+    private static <T extends IIOServiceProvider> Iterator<T> getServiceProviders(Class<T> category) {
+        IIORegistry registry = IIORegistry.getDefaultInstance();
+        List<T> out = new ArrayList<>();
+        for (Iterator<T> it = registry.getServiceProviders(category, true); ; ) {
+            try {
+                if (!it.hasNext()) {
+                    break;
+                }
+                out.add(it.next());
+            } catch (RuntimeException | LinkageError e) {
+                // skip the provider that cannot be loaded
+            }
+        }
+        return out.iterator();
     }
 
     public static boolean hasJpeg2000Support() {
@@ -110,7 +146,7 @@ public final class ImageCodec {
         return ImageIO.getImageReadersByFormatName("JPEG2000").hasNext();
     }
 
-    /** Decode PNG/JPEG/TIFF/JPEG2000/... image bytes into a pixel buffer. */
+    /** Decode PNG/JPEG/TIFF/JPEG2000 bytes into a pixel buffer. */
     public static PixelBuffer decode(byte[] bytes) throws IOException {
         registerImageIoPlugins();
         try (ImageInputStream iis = new MemoryCacheImageInputStream(new ByteArrayInputStream(bytes))) {
@@ -125,6 +161,70 @@ public final class ImageCodec {
             } finally {
                 reader.dispose();
             }
+        }
+    }
+
+    /**
+     * Image pixels of a PDF image XObject.
+     *
+     * <p>PDFBox's own JPEG2000 decoding looks the ImageIO reader up through
+     * {@code ServiceLoader} only, so it ignores the SPIs registered here. When
+     * a shaded or bundled jar lost the plugin's {@code META-INF/services}
+     * entries, writing still works but such PDFs cannot be read back.</p>
+     */
+    public static BufferedImage getImage(PDImageXObject image) throws IOException {
+        // Pixels come from the raw data, so the image need not be backed by a
+        // COSStream (PDFBox lazily wraps loaded images in PDImageXObject-like
+        // views that open their stream up front; a broken service file can
+        // make ImageIO throw while they are set up).
+        COSDictionary dict = image.getCOSObject();
+        COSBase filter = dict.getDictionaryObject(COSName.FILTER);
+        boolean jpx = COSName.JPX_DECODE.equals(filter)
+                || (filter instanceof COSArray
+                    && ((COSArray) filter).getObject(0) instanceof COSName
+                    && COSName.JPX_DECODE.equals(((COSArray) filter).getObject(0)));
+        if (!jpx) {
+            return image.getImage();
+        }
+        int w = dict.getInt(COSName.WIDTH, 0);
+        int h = dict.getInt(COSName.HEIGHT, 0);
+        COSBase cs = dict.getDictionaryObject(COSName.COLORSPACE);
+        // Only gray and plain RGB are converted here; other color spaces
+        // (CMYK, ICC based) are left to PDFBox's conversion.
+        if (!COSName.DEVICEGRAY.equals(cs) && !COSName.DEVICERGB.equals(cs)) {
+            return image.getImage();
+        }
+        try {
+            PixelBuffer px;
+            try (InputStream is = image.getStream().getCOSObject().createRawInputStream();
+                 ImageInputStream iis = new MemoryCacheImageInputStream(is)) {
+                px = decodeImage(iis);
+            }
+            if (COSName.DEVICERGB.equals(cs)) {
+                if (px.getChannels() == 1) {
+                    px = px.toRgb();
+                }
+            } else {
+                px = px.toGrayscale();
+            }
+            return toBufferedImage(px.getWidth() == w && px.getHeight() == h ? px : px.resize(w, h));
+        } catch (RuntimeException e) {
+            throw new IOException("Could not decode JPEG2000 image", e);
+        }
+    }
+
+    /** Decode JPEG2000 bytes through ImageIO, with the SPI registered by hand. */
+    private static PixelBuffer decodeImage(ImageInputStream iis) throws IOException {
+        registerImageIoPlugins();
+        if (!ImageIO.getImageReaders(iis).hasNext()) {
+            throw new IOException("No ImageIO reader for image data");
+        }
+        ImageReader reader = ImageIO.getImageReaders(iis).next();
+        try {
+            reader.setInput(iis, true, true);
+            return fromBufferedImage(reader.read(0));
+        } finally {
+            reader.dispose();
         }
     }
 

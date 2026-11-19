@@ -133,6 +133,27 @@ public final class PixelBuffer {
     }
 
     /**
+     * Convert to 3-channel RGB (grayscale is replicated, alpha dropped).
+     */
+    public PixelBuffer toRgb() {
+        if (channels == 3) {
+            return this;
+        }
+        PixelBuffer out = new PixelBuffer(width, height, 3);
+        int n = width * height;
+        for (int i = 0; i < n; i++) {
+            int p = i * channels;
+            int r = data[p] & 0xff;
+            int g = channels == 1 ? r : data[p + 1] & 0xff;
+            int b = channels == 1 ? r : data[p + 2] & 0xff;
+            out.data[i * 3] = (byte) r;
+            out.data[i * 3 + 1] = (byte) g;
+            out.data[i * 3 + 2] = (byte) b;
+        }
+        return out;
+    }
+
+    /**
      * Pillow {@code thumbnail((w, h))}: shrink so both dimensions fit, keeping
      * the aspect ratio, and never enlarge.
      */
