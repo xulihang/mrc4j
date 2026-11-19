@@ -34,11 +34,14 @@ final class DrawScanner {
         final COSName name;
         final PDImageXObject image;
         final Matrix ctm;
+        /** 0 = drawn by the page itself, >0 = inside a form XObject. */
+        final int depth;
 
-        Draw(COSName name, PDImageXObject image, Matrix ctm) {
+        Draw(COSName name, PDImageXObject image, Matrix ctm, int depth) {
             this.name = name;
             this.image = image;
             this.ctm = ctm;
+            this.depth = depth;
         }
     }
 
@@ -104,7 +107,7 @@ final class DrawScanner {
                         }
                         if (x instanceof PDImageXObject) {
                             PDImageXObject img = (PDImageXObject) x;
-                            out.add(new Draw(name, img, ctm.clone()));
+                            out.add(new Draw(name, img, ctm.clone(), depth));
                         } else if (x != null && depth < MAX_FORM_DEPTH) {
                             COSStream form = (COSStream) x.getCOSObject();
                             PDResources formRes = form.getCOSDictionary(COSName.RESOURCES) == null
@@ -191,22 +194,68 @@ final class DrawScanner {
             kept.add(t);
         }
         if (changed) {
-            try {
-                ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                new ContentStreamWriter(bos).writeTokens(kept);
-                byte[] content = bos.toByteArray();
-                // We write the tokens uncompressed, so the original filter
-                // (usually /FlateDecode) must be removed; otherwise the PDF
-                // declares a filter that is not present in the stream.
-                stream.removeItem(COSName.FILTER);
-                stream.removeItem(COSName.DECODE_PARMS);
-                stream.setItem(COSName.LENGTH, org.apache.pdfbox.cos.COSInteger.get(content.length));
-                try (var os = stream.createRawOutputStream()) {
-                    os.write(content);
+            writeTokens(stream, kept);
+        }
+    }
+
+    /**
+     * Replace every {@code /name Do} whose image was compressed with
+     * {@code /bg Do /fg Do}, in place. Keeping the draw at its original
+     * content-stream position preserves the order of text and vector art.
+     */
+    static void replaceImageDraws(COSStream stream,
+                                  java.util.Map<COSName, PageCompressor.Layers> replacements) {
+        if (replacements.isEmpty()) {
+            return;
+        }
+        List<Object> tokens;
+        try {
+            PDFStreamParser parser = new PDFStreamParser(decoded(stream));
+            parser.parse();
+            tokens = parser.getTokens();
+        } catch (IOException e) {
+            return;
+        }
+        List<Object> kept = new ArrayList<>(tokens.size() + replacements.size() * 2);
+        boolean changed = false;
+        for (int i = 0; i < tokens.size(); i++) {
+            Object t = tokens.get(i);
+            if (t instanceof Operator && "Do".equals(((Operator) t).getName()) && i > 0
+                    && tokens.get(i - 1) instanceof COSName) {
+                COSName name = (COSName) tokens.get(i - 1);
+                PageCompressor.Layers layers = replacements.get(name);
+                if (layers != null) {
+                    kept.remove(kept.size() - 1); // remove the original name
+                    kept.add(COSName.getPDFName(layers.bg()));
+                    kept.add(t);
+                    kept.add(COSName.getPDFName(layers.fg()));
+                    kept.add(t);
+                    changed = true;
+                    continue;
                 }
-            } catch (IOException e) {
-                throw new IllegalStateException("cannot rewrite content stream", e);
             }
+            kept.add(t);
+        }
+        if (changed) {
+            writeTokens(stream, kept);
+        }
+    }
+
+    private static void writeTokens(COSStream stream, List<Object> tokens) {
+        try {
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            new ContentStreamWriter(bos).writeTokens(tokens);
+            byte[] content = bos.toByteArray();
+            // The tokens are written uncompressed, so the original filter
+            // (usually /FlateDecode) must be removed.
+            stream.removeItem(COSName.FILTER);
+            stream.removeItem(COSName.DECODE_PARMS);
+            stream.setItem(COSName.LENGTH, org.apache.pdfbox.cos.COSInteger.get(content.length));
+            try (var os = stream.createRawOutputStream()) {
+                os.write(content);
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("cannot rewrite content stream", e);
         }
     }
 }

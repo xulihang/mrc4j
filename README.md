@@ -51,6 +51,22 @@ each image. The overload with explicit rates takes
 and needs no external `kdu_compress` / `jbig2` executable. Text drawn into the
 content stream afterwards stays on top.
 
+For an already loaded PDF, `Mrc4j.compressPage(doc, pageIndex)` compresses the
+page-level images in place. Each image draw is replaced at its original
+content-stream position, so text and vector content keep their drawing order;
+iterate the pages to update progress and save the document afterwards:
+
+```java
+for (int i = 0; i < doc.getNumberOfPages(); i++) {
+    long bytes = Mrc4j.compressPage(doc, i);
+    // update progress here
+}
+doc.save(out);
+```
+
+Images inside form XObjects are left untouched. `compressInPlace` / `compress`
+use the same in-place replacement for whole-document callers.
+
 ## Run
 
 ```

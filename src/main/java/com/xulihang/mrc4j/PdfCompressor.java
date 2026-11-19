@@ -191,7 +191,7 @@ public final class PdfCompressor {
     List<ImageResult> compressAll() throws IOException {
         List<ImageResult> results = new ArrayList<>();
         int pageNumber = 1;
-        PageCompressor pageCompressor = new PageCompressor(doc, this, options);
+        PageCompressor pageCompressor = new PageCompressor(doc, this);
         for (PDPage page : doc.getPages()) {
             if (options.debug) {
                 System.out.println("page " + pageNumber);

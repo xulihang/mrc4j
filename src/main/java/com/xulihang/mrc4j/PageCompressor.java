@@ -2,38 +2,39 @@ package com.xulihang.mrc4j;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.apache.pdfbox.cos.COSDictionary;
+import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSStream;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
-import org.apache.pdfbox.pdmodel.PDPageContentStream;
-import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDResources;
-import org.apache.pdfbox.util.Matrix;
+import org.apache.pdfbox.pdmodel.common.PDStream;
 
 /**
- * Port of {@code compress_page_images()} in bin/compress-pdf-images.
+ * Replaces the page-level images with MRC layers in place.
  *
- * <p>Every image that is drawn on the page is extracted, MRC-compressed and
- * removed from the page content. The compressed background and foreground
- * (with the 1-bit mask as {@code /SMask}) are then appended with the same
- * placement rectangle, so the visual result is the same but far smaller, and
- * the original text layer stays where it was.</p>
+ * <p>Each {@code /Name Do} image draw is rewritten to draw the background and
+ * then the foreground (with its mask) at the same position in the content
+ * stream. Unlike appending the layers at the end of the page, this preserves
+ * the original drawing order, so a text layer or vector art drawn after the
+ * image stays visible on top.</p>
  */
 final class PageCompressor {
 
     private final PDDocument doc;
     private final PdfCompressor compressor;
-    private final PdfCompressor.Options options;
 
-    PageCompressor(PDDocument doc, PdfCompressor compressor, PdfCompressor.Options options) {
+    PageCompressor(PDDocument doc, PdfCompressor compressor) {
         this.doc = doc;
         this.compressor = compressor;
-        this.options = options;
     }
 
-    /** Replacements for one drawing of an image. */
+    /** Resource names for one image's MRC background and foreground. */
     static final class Layers {
         private final String bg;
         private final String fg;
@@ -59,99 +60,71 @@ final class PageCompressor {
             return results;
         }
 
-        // Compress each distinct image once (shared images are not uncommon).
-        int slot = 0;
-        List<Placement> placements = new ArrayList<>();
-        java.util.Map<COSDictionary, PdfCompressor.ImageResult> shared = new java.util.IdentityHashMap<>();
-        java.util.Map<COSDictionary, Layers> sharedLayers = new java.util.IdentityHashMap<>();
-        for (DrawScanner.Draw draw : draws) {
-            String name = "fzImg" + slot;
-            PdfCompressor.ImageResult r = shared.get(draw.image.getCOSObject());
-            if (r == null) {
-                r = compressor.compressImage(draw.image, pageNumber, name);
-                results.add(r);
-                shared.put(draw.image.getCOSObject(), r);
-            }
-            placements.add(new Placement(draw, r, name, shared, sharedLayers));
-            slot++;
-        }
-
-        // Take the originals off the page.
-        for (Placement p : placements) {
-            DrawScanner.removeDraws(page, p.draw.name);
-            PDResources pageRes = page.getResources();
-            var xobjects = pageRes == null ? null : pageRes.getCOSObject().getCOSDictionary(COSName.XOBJECT);
-            if (xobjects != null) {
-                xobjects.removeItem(p.draw.name);
-            }
-        }
-
-        // Draw the MRC layers in the original order.
         PDResources res = page.getResources();
         if (res == null) {
             res = new PDResources();
             page.setResources(res);
         }
-        PDPageContentStream cs = new PDPageContentStream(doc, page,
-                PDPageContentStream.AppendMode.APPEND, true, true);
-        try {
-            for (Placement p : placements) {
-                Layers layers = p.layers(doc, res);
-                cs.saveGraphicsState();
-                placeImage(cs, layers.bg(), p);
-                placeImage(cs, layers.fg(), p);
-                cs.restoreGraphicsState();
+
+        // Compress each distinct image once (shared images are not uncommon).
+        Map<COSDictionary, PdfCompressor.ImageResult> shared = new IdentityHashMap<>();
+        Map<COSDictionary, Layers> sharedLayers = new IdentityHashMap<>();
+        Map<COSName, Layers> replacements = new HashMap<>();
+        int slot = 0;
+        for (DrawScanner.Draw draw : draws) {
+            // Images inside form XObjects need the form's resources and
+            // content stream rewritten as well; leave them untouched here.
+            if (draw.depth != 0) {
+                continue;
             }
-        } finally {
-            cs.close();
+            PdfCompressor.ImageResult result = shared.get(draw.image.getCOSObject());
+            if (result == null) {
+                result = compressor.compressImage(draw.image, pageNumber, "mrc" + slot);
+                results.add(result);
+                shared.put(draw.image.getCOSObject(), result);
+            }
+            Layers layers = sharedLayers.get(draw.image.getCOSObject());
+            if (layers == null) {
+                String bgName = uniqueName(res, "mrcBg" + slot);
+                String fgName = uniqueName(res, "mrcFg" + slot);
+                MrcImages.addBackground(doc, res, bgName, result);
+                MrcImages.addForeground(doc, res, fgName, result);
+                layers = new Layers(bgName, fgName);
+                sharedLayers.put(draw.image.getCOSObject(), layers);
+            }
+            replacements.put(draw.name, layers);
+            slot++;
+        }
+        if (replacements.isEmpty()) {
+            return results;
+        }
+
+        // Replace each image draw in place, preserving the content order.
+        for (java.util.Iterator<?> it = page.getContentStreams(); it.hasNext(); ) {
+            COSStream stream = (COSStream) ((PDStream) it.next()).getCOSObject();
+            DrawScanner.replaceImageDraws(stream, replacements);
+        }
+
+        // The original image XObjects are no longer referenced by this page.
+        COSDictionary xobjects = res.getCOSObject().getCOSDictionary(COSName.XOBJECT);
+        if (xobjects != null) {
+            for (COSName original : replacements.keySet()) {
+                xobjects.removeItem(original);
+            }
         }
         return results;
     }
 
-    /**
-     * Draw the replacement image with exactly the CTM the original image was
-     * drawn with, so orientation, rotation and placement are preserved.
-     */
-    void placeImage(PDPageContentStream cs, String name, Placement p) throws IOException {
-        Matrix m = p.draw.ctm;
-        cs.appendRawCommands("q " + fmt(m.getScaleX()) + " " + fmt(m.getShearY()) + " "
-                + fmt(m.getShearX()) + " " + fmt(m.getScaleY()) + " "
-                + fmt(m.getTranslateX()) + " " + fmt(m.getTranslateY())
-                + " cm /" + name + " Do Q\n");
-    }
-
-    static String fmt(double v) {
-        return String.format(java.util.Locale.ROOT, "%.6f", v);
-    }
-
-    /** One compressed image placement. */
-    static final class Placement {
-        final DrawScanner.Draw draw;
-        final PdfCompressor.ImageResult result;
-        final String name;
-        final java.util.Map<COSDictionary, PdfCompressor.ImageResult> shared;
-        final java.util.Map<COSDictionary, Layers> sharedLayers;
-
-        Placement(DrawScanner.Draw draw, PdfCompressor.ImageResult result, String name,
-                  java.util.Map<COSDictionary, PdfCompressor.ImageResult> shared,
-                  java.util.Map<COSDictionary, Layers> sharedLayers) {
-            this.draw = draw;
-            this.result = result;
-            this.name = name;
-            this.shared = shared;
-            this.sharedLayers = sharedLayers;
+    private static String uniqueName(PDResources res, String base) {
+        COSDictionary xobjects = res.getCOSObject().getCOSDictionary(COSName.XOBJECT);
+        if (xobjects == null) {
+            return base;
         }
-
-        Layers layers(PDDocument doc, PDResources res) throws IOException {
-            Layers existing = sharedLayers.get(draw.image.getCOSObject());
-            if (existing != null) {
-                return existing;
-            }
-            String bg = MrcImages.addBackground(doc, res, name + "Bg", result);
-            String fg = MrcImages.addForeground(doc, res, name, result);
-            Layers l = new Layers(bg, fg);
-            sharedLayers.put(draw.image.getCOSObject(), l);
-            return l;
+        String name = base;
+        int suffix = 1;
+        while (xobjects.containsKey(COSName.getPDFName(name))) {
+            name = base + "_" + suffix++;
         }
+        return name;
     }
 }

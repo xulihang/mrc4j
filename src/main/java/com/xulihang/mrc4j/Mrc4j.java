@@ -4,6 +4,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.util.List;
 
 import org.apache.pdfbox.cos.COSBase;
 import org.apache.pdfbox.cos.COSName;
@@ -99,12 +100,39 @@ public final class Mrc4j {
         return bytes;
     }
 
+    /**
+     * Compress the page-level images of an already loaded PDF page in place.
+     * Image draws are replaced at the same content-stream position, so text
+     * and vector content keep their order. Save the document afterwards.
+     *
+     * @return approximate encoded layer bytes for this page
+     */
+    public static long compressPage(PDDocument doc, int pageIndex) throws IOException {
+        return compressPage(doc, pageIndex, 0.4, 0.2, 3);
+    }
+
+    /** Compress one page of an existing PDF, with explicit rates. */
+    public static long compressPage(PDDocument doc, int pageIndex, double fgBitsPerPixel,
+                                    double bgBitsPerPixel, int bgDownsample)
+            throws IOException {
+        PdfCompressor.Options options = options(fgBitsPerPixel, bgBitsPerPixel, bgDownsample);
+        PdfCompressor compressor = new PdfCompressor(doc, options);
+        List<PdfCompressor.ImageResult> results =
+                new PageCompressor(doc, compressor).compress(doc.getPage(pageIndex), pageIndex + 1);
+        long bytes = 0;
+        for (PdfCompressor.ImageResult result : results) {
+            bytes += result.bgJp2().length + result.fgJp2().length;
+            if (result.maskJbig2() != null) {
+                bytes += result.maskJbig2().length;
+            }
+        }
+        return bytes;
+    }
+
     /** Compress a PDF in place using JAI JPEG 2000, a G4 mask and 0.4/0.2 bpp. */
     public static void compressInPlace(String pdfPath) throws IOException {
         compressInPlace(pdfPath, 0.4, 0.2, 3);
-    }
-
-    /** Compress a PDF in place. */
+    }    /** Compress a PDF in place. */
     public static void compressInPlace(String pdfPath, double fgBitsPerPixel,
                                        double bgBitsPerPixel, int bgDownsample)
             throws IOException {
