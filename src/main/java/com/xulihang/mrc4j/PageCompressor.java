@@ -34,7 +34,22 @@ final class PageCompressor {
     }
 
     /** Replacements for one drawing of an image. */
-    record Layers(String bg, String fg) {
+    static final class Layers {
+        private final String bg;
+        private final String fg;
+
+        Layers(String bg, String fg) {
+            this.bg = bg;
+            this.fg = fg;
+        }
+
+        String bg() {
+            return bg;
+        }
+
+        String fg() {
+            return fg;
+        }
     }
 
     List<PdfCompressor.ImageResult> compress(PDPage page, int pageNumber) throws IOException {

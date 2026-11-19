@@ -67,17 +67,21 @@ final class DrawScanner {
         Matrix ctm = base.clone();
         List<Matrix> stack = new ArrayList<>();
         for (int i = 0; i < tokens.size(); i++) {
-            if (!(tokens.get(i) instanceof Operator op)) {
+            Object token = tokens.get(i);
+            if (!(token instanceof Operator)) {
                 continue;
             }
+            Operator op = (Operator) token;
             switch (op.getName()) {
-                case "q" -> stack.add(ctm.clone());
-                case "Q" -> {
+                case "q":
+                    stack.add(ctm.clone());
+                    break;
+                case "Q":
                     if (!stack.isEmpty()) {
                         ctm = stack.remove(stack.size() - 1);
                     }
-                }
-                case "cm" -> {
+                    break;
+                case "cm":
                     if (i >= 6) {
                         try {
                             Matrix m = new Matrix(num(tokens.get(i - 6)), num(tokens.get(i - 5)),
@@ -88,16 +92,18 @@ final class DrawScanner {
                             // not a well-formed cm
                         }
                     }
-                }
-                case "Do" -> {
-                    if (i >= 1 && tokens.get(i - 1) instanceof COSName name) {
+                    break;
+                case "Do":
+                    if (i >= 1 && tokens.get(i - 1) instanceof COSName) {
+                        COSName name = (COSName) tokens.get(i - 1);
                         PDXObject x;
                         try {
                             x = res.getXObject(name);
                         } catch (IOException e) {
                             break;
                         }
-                        if (x instanceof PDImageXObject img) {
+                        if (x instanceof PDImageXObject) {
+                            PDImageXObject img = (PDImageXObject) x;
                             out.add(new Draw(name, img, ctm.clone()));
                         } else if (x != null && depth < MAX_FORM_DEPTH) {
                             COSStream form = (COSStream) x.getCOSObject();
@@ -108,10 +114,10 @@ final class DrawScanner {
                             }
                         }
                     }
-                }
-                default -> {
+                    break;
+                default:
                     // other operators leave the CTM untouched or are irrelevant
-                }
+                    break;
             }
         }
     }
@@ -120,9 +126,11 @@ final class DrawScanner {
     static List<COSStream> formStreams(COSStream form) throws IOException {
         List<COSStream> out = new ArrayList<>();
         org.apache.pdfbox.cos.COSBase contents = form.getDictionaryObject(COSName.CONTENTS);
-        if (contents instanceof org.apache.pdfbox.cos.COSArray arr) {
+        if (contents instanceof org.apache.pdfbox.cos.COSArray) {
+            org.apache.pdfbox.cos.COSArray arr = (org.apache.pdfbox.cos.COSArray) contents;
             for (int i = 0; i < arr.size(); i++) {
-                if (arr.getObject(i) instanceof COSStream s) {
+                if (arr.getObject(i) instanceof COSStream) {
+                    COSStream s = (COSStream) arr.getObject(i);
                     out.add(s);
                 }
             }
@@ -141,7 +149,8 @@ final class DrawScanner {
     }
 
     private static float num(Object token) {
-        if (token instanceof COSNumber n) {
+        if (token instanceof COSNumber) {
+            COSNumber n = (COSNumber) token;
             return n.floatValue();
         }
         throw new IllegalArgumentException("not a number");
@@ -168,8 +177,13 @@ final class DrawScanner {
         boolean changed = false;
         for (int i = 0; i < tokens.size(); i++) {
             Object t = tokens.get(i);
-            if (t instanceof Operator op && "Do".equals(op.getName()) && i > 0
-                    && name.equals(tokens.get(i - 1))) {
+            boolean drop = false;
+            if (t instanceof Operator) {
+                Operator op = (Operator) t;
+                drop = "Do".equals(op.getName()) && i > 0
+                        && name.equals(tokens.get(i - 1));
+            }
+            if (drop) {
                 kept.remove(kept.size() - 1); // drop the name operand
                 changed = true;
                 continue;

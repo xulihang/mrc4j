@@ -106,19 +106,19 @@ public final class Jpeg2000Encoder {
             cmd.add(jp2.getAbsolutePath());
             int slope = type == 'f' ? o.fgSlope : o.bgSlope;
             switch (o.encoder) {
-                case KAKADU -> {
+                case KAKADU:
                     cmd.add("-slope");
                     cmd.add(Integer.toString(slope));
                     cmd.add("-num_threads");
                     cmd.add(o.threads <= 1 ? "0" : Integer.toString(o.threads));
-                }
-                case GROK -> {
+                    break;
+                case GROK:
                     cmd.add("-Cp");
                     cmd.add("slope=" + slope);
                     cmd.add("-H");
                     cmd.add(Integer.toString(Math.max(1, o.threads)));
-                }
-                case OPENJPEG -> {
+                    break;
+                case OPENJPEG:
                     cmd.add("-I");
                     cmd.add("-r");
                     cmd.add(Double.toString(type == 'f' ? o.fgRate : o.bgRate));
@@ -126,8 +126,9 @@ public final class Jpeg2000Encoder {
                         cmd.add("-threads");
                         cmd.add(Integer.toString(o.threads));
                     }
-                }
-                default -> throw new IOException("unsupported encoder " + o.encoder);
+                    break;
+                default:
+                    throw new IOException("unsupported encoder " + o.encoder);
             }
             if (o.debug) {
                 System.out.println("  " + String.join(" ", cmd));

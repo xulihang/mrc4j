@@ -96,8 +96,11 @@ public final class Mask {
 
     @Override
     public boolean equals(Object o) {
-        return o instanceof Mask m && m.width == width && m.height == height
-                && Arrays.equals(m.data, data);
+        if (!(o instanceof Mask)) {
+            return false;
+        }
+        Mask m = (Mask) o;
+        return m.width == width && m.height == height && Arrays.equals(m.data, data);
     }
 
     @Override

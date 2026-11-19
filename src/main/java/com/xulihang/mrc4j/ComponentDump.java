@@ -3,7 +3,6 @@ package com.xulihang.mrc4j;
 import java.io.File;
 import java.nio.file.Files;
 import java.security.MessageDigest;
-import java.util.HexFormat;
 
 /**
  * Developer helper: dumps the MRC components of an image (as produced by
@@ -55,6 +54,14 @@ public final class ComponentDump {
     }
 
     static String md5(byte[] data) throws Exception {
-        return HexFormat.of().formatHex(MessageDigest.getInstance("MD5").digest(data));
+        byte[] digest = MessageDigest.getInstance("MD5").digest(data);
+        char[] hex = new char[digest.length * 2];
+        final char[] digits = "0123456789abcdef".toCharArray();
+        for (int i = 0; i < digest.length; i++) {
+            int v = digest[i] & 0xff;
+            hex[i * 2] = digits[v >>> 4];
+            hex[i * 2 + 1] = digits[v & 0x0f];
+        }
+        return new String(hex);
     }
 }

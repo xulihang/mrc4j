@@ -15,7 +15,16 @@ import java.nio.file.Path;
 public final class Jbig2Encoder {
 
     /** Encoded mask: {@code data} is what goes into the PDF stream. */
-    public record Result(byte[] data) {
+    public static final class Result {
+        private final byte[] data;
+
+        public Result(byte[] data) {
+            this.data = data;
+        }
+
+        public byte[] data() {
+            return data;
+        }
     }
 
     private Jbig2Encoder() {

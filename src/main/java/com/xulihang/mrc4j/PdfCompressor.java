@@ -73,10 +73,84 @@ public final class PdfCompressor {
     }
 
     /** Result for one compressed page image. */
-    public record ImageResult(String name, int pageNumber, int width, int height,
-                              int bgWidth, int bgHeight, int fgWidth, int fgHeight,
-                              Mask mask, byte[] maskJbig2,
-                              byte[] bgJp2, byte[] fgJp2) {
+    public static final class ImageResult {
+        private final String name;
+        private final int pageNumber;
+        private final int width;
+        private final int height;
+        private final int bgWidth;
+        private final int bgHeight;
+        private final int fgWidth;
+        private final int fgHeight;
+        private final Mask mask;
+        private final byte[] maskJbig2;
+        private final byte[] bgJp2;
+        private final byte[] fgJp2;
+
+        public ImageResult(String name, int pageNumber, int width, int height,
+                           int bgWidth, int bgHeight, int fgWidth, int fgHeight,
+                           Mask mask, byte[] maskJbig2, byte[] bgJp2, byte[] fgJp2) {
+            this.name = name;
+            this.pageNumber = pageNumber;
+            this.width = width;
+            this.height = height;
+            this.bgWidth = bgWidth;
+            this.bgHeight = bgHeight;
+            this.fgWidth = fgWidth;
+            this.fgHeight = fgHeight;
+            this.mask = mask;
+            this.maskJbig2 = maskJbig2;
+            this.bgJp2 = bgJp2;
+            this.fgJp2 = fgJp2;
+        }
+
+        public String name() {
+            return name;
+        }
+
+        public int pageNumber() {
+            return pageNumber;
+        }
+
+        public int width() {
+            return width;
+        }
+
+        public int height() {
+            return height;
+        }
+
+        public int bgWidth() {
+            return bgWidth;
+        }
+
+        public int bgHeight() {
+            return bgHeight;
+        }
+
+        public int fgWidth() {
+            return fgWidth;
+        }
+
+        public int fgHeight() {
+            return fgHeight;
+        }
+
+        public Mask mask() {
+            return mask;
+        }
+
+        public byte[] maskJbig2() {
+            return maskJbig2;
+        }
+
+        public byte[] bgJp2() {
+            return bgJp2;
+        }
+
+        public byte[] fgJp2() {
+            return fgJp2;
+        }
 
         public boolean jbig2() {
             return maskJbig2 != null;
@@ -188,30 +262,63 @@ public final class PdfCompressor {
         for (int i = 2; i < args.length; i++) {
             String a = args[i];
             switch (a) {
-                case "--kdu" -> o.jpeg2000.command = args[++i];
-                case "--jbig2" -> o.jbig2Command = args[++i];
-                case "--no-jbig2" -> o.useJbig2 = false;
-                case "--normal-jbig2" -> o.useJbig2 = true;
-                case "--fg-slope" -> o.jpeg2000.fgSlope = Integer.parseInt(args[++i]);
-                case "--bg-slope" -> o.jpeg2000.bgSlope = Integer.parseInt(args[++i]);
-                case "--fg-rates" -> o.jpeg2000.fgRate = Double.parseDouble(args[++i]);
-                case "--bg-rates" -> o.jpeg2000.bgRate = Double.parseDouble(args[++i]);
-                case "--fg-bpp" -> o.jpeg2000.fgBitsPerPixel = Double.parseDouble(args[++i]);
-                case "--bg-bpp" -> o.jpeg2000.bgBitsPerPixel = Double.parseDouble(args[++i]);
-                case "--encoder" -> o.jpeg2000.encoder = Jpeg2000Options.Encoder.valueOf(args[++i].toUpperCase(Locale.ROOT));
-                case "--bg-downsample" -> o.mrc.bgDownsample = Integer.parseInt(args[++i]);
-                case "--fg-downsample" -> o.mrc.fgDownsample = Integer.parseInt(args[++i]);
-                case "--dpi" -> o.mrc.dpi = Integer.parseInt(args[++i]);
-                case "--threads" -> o.jpeg2000.threads = Integer.parseInt(args[++i]);
-                case "--dump" -> o.dumpDir = new File(args[++i]);
-                case "--debug" -> {
+                case "--kdu":
+                    o.jpeg2000.command = args[++i];
+                    break;
+                case "--jbig2":
+                    o.jbig2Command = args[++i];
+                    break;
+                case "--no-jbig2":
+                    o.useJbig2 = false;
+                    break;
+                case "--normal-jbig2":
+                    o.useJbig2 = true;
+                    break;
+                case "--fg-slope":
+                    o.jpeg2000.fgSlope = Integer.parseInt(args[++i]);
+                    break;
+                case "--bg-slope":
+                    o.jpeg2000.bgSlope = Integer.parseInt(args[++i]);
+                    break;
+                case "--fg-rates":
+                    o.jpeg2000.fgRate = Double.parseDouble(args[++i]);
+                    break;
+                case "--bg-rates":
+                    o.jpeg2000.bgRate = Double.parseDouble(args[++i]);
+                    break;
+                case "--fg-bpp":
+                    o.jpeg2000.fgBitsPerPixel = Double.parseDouble(args[++i]);
+                    break;
+                case "--bg-bpp":
+                    o.jpeg2000.bgBitsPerPixel = Double.parseDouble(args[++i]);
+                    break;
+                case "--encoder":
+                    o.jpeg2000.encoder = Jpeg2000Options.Encoder.valueOf(
+                            args[++i].toUpperCase(Locale.ROOT));
+                    break;
+                case "--bg-downsample":
+                    o.mrc.bgDownsample = Integer.parseInt(args[++i]);
+                    break;
+                case "--fg-downsample":
+                    o.mrc.fgDownsample = Integer.parseInt(args[++i]);
+                    break;
+                case "--dpi":
+                    o.mrc.dpi = Integer.parseInt(args[++i]);
+                    break;
+                case "--threads":
+                    o.jpeg2000.threads = Integer.parseInt(args[++i]);
+                    break;
+                case "--dump":
+                    o.dumpDir = new File(args[++i]);
+                    break;
+                case "--debug":
                     o.debug = true;
                     o.jpeg2000.debug = true;
-                }
-                default -> {
+                    break;
+                default:
                     System.err.println("unknown option: " + a);
                     System.exit(2);
-                }
+                    break;
             }
         }
         long t0 = System.currentTimeMillis();

@@ -1,6 +1,6 @@
 # mrc4j
 
-Java (17) port of the image compression part of
+Java (11+) port of the image compression part of
 [internetarchive/archive-pdf-tools](https://github.com/internetarchive/archive-pdf-tools)
 (`bin/compress-pdf-images` / `internetarchivepdf/mrc.py`), package
 `com.xulihang.mrc4j`.
@@ -20,7 +20,7 @@ mvn -DskipTests package
 ```
 
 Produces `target/mrc4j-1.0-SNAPSHOT.jar` (self-contained; PDFBox, JAI
-JPEG2000 and jbig2 decoders are shaded in). Maven 3.6+ and JDK 17 are
+JPEG2000 and jbig2 decoders are shaded in). Maven 3.6+ and JDK 11+ are
 required.
 
 ## Run
