@@ -138,3 +138,14 @@ self-contained result is about **0.41 MB** with `--encoder java --no-jbig2`;
 `--fg-bpp 0.25 --bg-bpp 0.1` brings it to about **0.29 MB** with slightly
 softer artwork. The text/line art stays crisp and the page keeps its original
 colours and orientation.
+
+## License
+
+mrc4j is a Java port of the image compression part of
+[archive-pdf-tools](https://github.com/internetarchive/archive-pdf-tools).
+The original code is Copyright (C) 2020-2021 Internet Archive; original authors
+include Merlijn Wajer, Bas Weelinck and contributors.
+
+This project is distributed under the GNU Affero General Public License,
+version 3 or (at your option) any later version. See [LICENSE](LICENSE) and
+[NOTICE](NOTICE).

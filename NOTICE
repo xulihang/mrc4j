@@ -1,0 +1,14 @@
+mrc4j
+
+Java port of the image compression part of archive-pdf-tools:
+https://github.com/internetarchive/archive-pdf-tools
+
+Original work:
+Copyright (C) 2020-2021 Internet Archive
+Original authors include Merlijn Wajer, Bas Weelinck and contributors.
+
+The original code is licensed under the GNU Affero General Public License,
+version 3 or (at your option) any later version.
+
+This Java port is distributed under the GNU Affero General Public License,
+version 3 or (at your option) any later version. See the LICENSE file.
