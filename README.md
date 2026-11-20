@@ -13,6 +13,81 @@ and put back where the original image was:
   replaced by averaged surrounding content (so it compresses well)
 * **background** – inverted mask, downsampled (`--bg-downsample 3` by default)
 
+## How it compares
+
+| Approach | What it encodes | Strength | Weakness |
+| --- | --- | --- | --- |
+| PNG / Flate | Every pixel, losslessly | No quality loss | 5–10x larger; only useful as a fallback (`--encoder none`) |
+| Baseline JPEG (lower quality) | All pixels in one DCT layer | Simple, universally supported | At small sizes thin strokes blur and ringing/block artefacts appear around text; the same setting degrades text, paper and photos together |
+| JPEG 2000 | All pixels in one wavelet layer | Better low-rate behaviour than JPEG, progressive | Still one layer: text and background compete for the same bits |
+| CCITT G4 / TIFF G4 | 1-bit pixels | Lossless for pure black-and-white text, fast | No grey or colour |
+| JBIG2 (ITU T.88) | 1-bit pixels + symbol dictionary | The most compact bilevel coding, often 1.5–3x smaller than G4 on text | Bilevel only; needs jbig2enc to encode |
+| DjVu | JB2 text layer + IW44 colour layers | Very small for scans, multi-resolution | Separate container format, not PDF |
+| MRC (this project) | 1-bit mask + colour foreground + downsampled background | Text stays sharp while colour is compressed independently | A full-page colour foreground costs bytes on photo-heavy pages |
+
+Every layer is stored with standard PDF filters (`/JPXDecode`,
+`/CCITTFaxDecode` or `/JBIG2Decode`), so the output remains an ordinary PDF:
+no proprietary container, and any conforming viewer can read it.
+
+## Why text and line art stay sharp
+
+Text strokes and line art are almost entirely high-frequency detail, which
+is exactly what a transform codec discards first when the bit rate drops. In
+a single-layer JPEG or JPEG 2000 file, lowering the quality to shrink the
+file blurs thin strokes, makes grey text fade, and adds ringing and block
+artefacts around black letters. MRC avoids that trade-off by splitting the
+page into layers with very different statistics:
+
+* **The mask is bilevel and coded without loss.** Sauvola thresholding
+  extracts the strokes into a 1-bit mask, which is coded with G4 or JBIG2 –
+  codecs whose only job is to reproduce two-tone pixels. Quantization never
+  touches the stroke outlines, so they stay as crisp as the scan regardless
+  of the colour rate.
+
+* **Text quality is decoupled from file size.** `--fg-bpp`, `--bg-bpp` and
+  `--fg-downsample` change only the colour layers; not a single mask pixel
+  changes. A single-layer codec, by contrast, degrades text and paper
+  together when its quality knob is turned down.
+
+* **Noise is removed rather than encoded.** Paper grain and sensor noise are
+  high-frequency and would otherwise consume a large part of the bit budget.
+  Mask binarisation plus speckle removal keeps isolated noise dots out of the
+  text layer; background downsampling averages the remaining noise; and the
+  optimiser replaces everything outside the mask with local means. Flat paper
+  stays flat and therefore cheap to encode, instead of being preserved as
+  blocky texture the way a low-quality JPEG does.
+
+* **Colour is spent where it is visible.** The foreground keeps the actual
+  colour of the masked pixels (red headings, stamps, coloured line art),
+  while the non-masked area is filled with nearby averages. Bits go to the
+  pixels the reader looks at instead of being spread uniformly over the page.
+
+This is why an MRC file can look cleaner than a JPEG several times larger:
+the parts the eye is most sensitive to (black strokes and text edges) are
+preserved exactly, while the parts JPEG spends most of its bits on (paper
+texture and noise) are removed or averaged out.
+
+## Tuning by document type
+
+There is no single setting that fits every page:
+
+* **Text-heavy scans**: keep the mask at full resolution and lower the colour
+  rates (`--fg-bpp 0.2 --bg-bpp 0.1`, optionally `--fg-downsample 2`). On a
+  300 dpi magazine page (2482x3221) this takes the output from about 485 KB
+  with the defaults to about 120 KB, while the text outlines are unchanged.
+* **Comics / line art**: keep the foreground at full resolution
+  (`--fg-downsample 1`), because the colour layer contains the line art
+  itself; aggressive downsampling softens coloured edges.
+* **Photo-heavy pages**: the full-page colour foreground dominates the size;
+  lowering its rate is the main lever, at the cost of softer artwork.
+* **Searchable text**: the MRC layers contain no text; a separate invisible
+  text layer (as added by ImageTrans) is needed for search and copy. Its
+  embedded font can be a significant part of the final file size.
+
+Once the colour layers are small, the mask becomes the next bottleneck;
+installing jbig2enc replaces the G4 fallback with JBIG2 and typically saves
+another 20–40% on the mask.
+
 ## Build
 
 ```
