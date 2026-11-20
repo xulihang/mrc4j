@@ -71,15 +71,18 @@ texture and noise) are removed or averaged out.
 
 There is no single setting that fits every page:
 
-* **Text-heavy scans**: keep the mask at full resolution and lower the colour
-  rates (`--fg-bpp 0.2 --bg-bpp 0.1`, optionally `--fg-downsample 2`). On a
-  300 dpi magazine page (2482x3221) this takes the output from about 485 KB
-  with the defaults to about 120 KB, while the text outlines are unchanged.
-* **Comics / line art**: keep the foreground at full resolution
-  (`--fg-downsample 1`), because the colour layer contains the line art
-  itself; aggressive downsampling softens coloured edges.
-* **Photo-heavy pages**: the full-page colour foreground dominates the size;
-  lowering its rate is the main lever, at the cost of softer artwork.
+* **Text-heavy scans**: `--preset small` (or `balanced` for more colour
+  fidelity). Under the hood this lowers the colour rates and can downsample
+  the colour foreground while the mask stays at full resolution. On a 300 dpi
+  magazine page (2482x3221) `balanced` takes the output from about 485 KB
+  with the defaults to about 120 KB, and `small` goes below 100 KB; the text
+  outlines are unchanged either way.
+* **Comics / line art**: `--preset comic` keeps the foreground at full
+  resolution, because the colour layer contains the line art itself;
+  aggressive downsampling softens coloured edges.
+* **Photo-heavy pages**: `--preset photo` keeps more colour and background
+  resolution; the full-page colour foreground dominates the size, so lowering
+  its rate is the main lever.
 * **Searchable text**: the MRC layers contain no text; a separate invisible
   text layer (as added by ImageTrans) is needed for search and copy. Its
   embedded font can be a significant part of the final file size.
@@ -158,13 +161,15 @@ java -cp target/mrc4j-1.0-SNAPSHOT.jar com.xulihang.mrc4j.PdfCompressor \
 `--encoder java` uses the JAI JPEG2000 writer bundled in the jar; `--no-jbig2`
 uses a CCITT Group 4 mask (pass `--mask-compression flate` for Flate). With
 Kakadu and jbig2enc installed, omit both flags to use the same defaults as
-archive-pdf-tools.
+archive-pdf-tools. Add `--preset balanced` (or another profile below) to pick
+a quality/size point without tuning individual rates.
 
 Options:
 
 | option | meaning |
 | --- | --- |
 | `--encoder kakadu\|openjpeg\|grok\|java\|none` | JPEG2000 encoder; `java` is built in |
+| `--preset high\|balanced\|small\|comic\|photo` | quality/size profile for the Java pipeline (see below) |
 | `--kdu PATH` | `kdu_compress` binary (Kakadu); default: `kdu_compress` from PATH |
 | `--jbig2 PATH` | `jbig2` (jbig2enc) binary; default: `jbig2` from PATH |
 | `--no-jbig2` | don't use jbig2enc; use the mask fallback |
@@ -172,6 +177,7 @@ Options:
 | `--fg-slope N` / `--bg-slope N` | Kakadu slope values (44500 / 44250) |
 | `--fg-rates R` / `--bg-rates R` | OpenJPEG/Grok compression ratios (750 / 500) |
 | `--fg-bpp N` / `--bg-bpp N` | Java (JAI) encoder rates in bits/pixel (0.4 / 0.2) |
+| `--fg-downsample N` | foreground downsample factor (1 = full resolution) |
 | `--bg-downsample N` | background downsample factor (3) |
 | `--dpi N` | fallback DPI for the Sauvola window (300) |
 | `--dump DIR` | write the MRC layers as PNG files |
@@ -179,6 +185,26 @@ Options:
 
 With `--encoder none` the foreground/background are stored as Flate-compressed
 8-bit images (usage fallback) instead of JPEG2000.
+
+### Presets
+
+`--preset` sets the JAI rates and the two downsample factors in one go. It
+targets the built-in encoder (`--encoder java`); the mask codec and encoder
+choice remain independent. Individual options placed **after** the preset
+override its values, e.g. `--preset small --fg-bpp 0.2`.
+
+| preset | fg bpp | bg bpp | fg downsample | bg downsample | use for |
+| --- | --- | --- | --- | --- | --- |
+| `high` | 0.40 | 0.20 | 1 (full) | 1 (full) | print and zooming |
+| `balanced` | 0.20 | 0.10 | 2 | 3 | general documents |
+| `small` | 0.10 | 0.08 | 3 | 3 | screen reading |
+| `comic` | 0.30 | 0.10 | 1 (full) | 2 | comics and line art |
+| `photo` | 0.25 | 0.15 | 2 | 2 | photo-heavy pages |
+
+For scale: on a 300 dpi form (2480x3508) `high` is about 700 KB and `small`
+about 70 KB; on the magazine sample above `balanced` is about 120 KB. The
+`comic` profile deliberately keeps the colour foreground at full resolution,
+because downsampling it softens coloured line art.
 
 Other entry points:
 

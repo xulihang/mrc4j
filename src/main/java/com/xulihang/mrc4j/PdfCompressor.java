@@ -54,6 +54,7 @@ import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
  *   --fg-bpp N          Java (JAI) foreground rate, bits per pixel (default 0.4)
  *   --bg-bpp N          Java (JAI) background rate, bits per pixel (default 0.2)
  *   --encoder NAME      kakadu | openjpeg | grok | java | none
+ *   --preset NAME       high | balanced | small | comic | photo
  *   --bg-downsample N   background downsample factor (default 3)
  *   --dpi N             fallback DPI when the image has none (default 300)
  *   --threads N         encoder threads (default 1)
@@ -94,6 +95,61 @@ public final class PdfCompressor {
         public MrcDecomposer.Options mrc = MrcDecomposer.Options.defaults();
         public File dumpDir = null;
         public boolean debug = false;
+    }
+
+    /**
+     * Named quality/size profiles for the built-in Java pipeline. A preset
+     * sets the JAI rates and the foreground/background downsample factors;
+     * explicit options that follow {@code --preset} on the command line
+     * override individual values.
+     */
+    public enum Preset {
+        /** Full-resolution colour: largest files, best for print and zooming. */
+        HIGH(0.40, 0.20, 1, 1),
+        /** General-purpose documents: half-resolution colour, 1/3 background. */
+        BALANCED(0.20, 0.10, 2, 3),
+        /** Screen reading: 1/3 colour and background, low rates. */
+        SMALL(0.10, 0.08, 3, 3),
+        /** Comics and line art: keep the colour foreground full resolution. */
+        COMIC(0.30, 0.10, 1, 2),
+        /** Photo-heavy pages: keep more colour and background resolution. */
+        PHOTO(0.25, 0.15, 2, 2);
+
+        private final double fgBitsPerPixel;
+        private final double bgBitsPerPixel;
+        private final int fgDownsample;
+        private final int bgDownsample;
+
+        Preset(double fgBitsPerPixel, double bgBitsPerPixel,
+               int fgDownsample, int bgDownsample) {
+            this.fgBitsPerPixel = fgBitsPerPixel;
+            this.bgBitsPerPixel = bgBitsPerPixel;
+            this.fgDownsample = fgDownsample;
+            this.bgDownsample = bgDownsample;
+        }
+
+        /** Apply this profile's rates and downsample factors to {@code o}. */
+        public void apply(Options o) {
+            o.jpeg2000.fgBitsPerPixel = fgBitsPerPixel;
+            o.jpeg2000.bgBitsPerPixel = bgBitsPerPixel;
+            o.mrc.fgDownsample = fgDownsample;
+            o.mrc.bgDownsample = bgDownsample;
+        }
+
+        /** Parse a preset name (case-insensitive). */
+        public static Preset parse(String name) {
+            try {
+                return valueOf(name.trim().toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("unknown preset '" + name
+                        + "'; valid presets: high, balanced, small, comic, photo");
+            }
+        }
+
+        /** Lower-case name accepted by {@code --preset}. */
+        public String optionName() {
+            return name().toLowerCase(Locale.ROOT);
+        }
     }
 
     /** Result for one compressed page image. */
@@ -357,6 +413,22 @@ public final class PdfCompressor {
                         o.useJbig2 = false;
                         o.maskFallback = "flate".equals(mask)
                                 ? MaskFallback.FLATE : MaskFallback.G4;
+                    }
+                    break;
+                }
+                case "--preset": {
+                    try {
+                        Preset preset = Preset.parse(args[++i]);
+                        preset.apply(o);
+                        System.out.printf(Locale.ROOT,
+                                "preset %s: fg-bpp %.2f bg-bpp %.2f "
+                                        + "fg-downsample %d bg-downsample %d%n",
+                                preset.optionName(), o.jpeg2000.fgBitsPerPixel,
+                                o.jpeg2000.bgBitsPerPixel,
+                                o.mrc.fgDownsample, o.mrc.bgDownsample);
+                    } catch (IllegalArgumentException e) {
+                        System.err.println(e.getMessage());
+                        System.exit(2);
                     }
                     break;
                 }
