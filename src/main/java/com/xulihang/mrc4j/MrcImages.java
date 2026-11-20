@@ -24,6 +24,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 
+import org.apache.pdfbox.cos.COSArray;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSInteger;
 import org.apache.pdfbox.cos.COSName;
@@ -43,9 +44,14 @@ import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
  * <p>JPEG2000 data is embedded as raw {@code /JPXDecode} streams, exactly like
  * the Python tool does when it hands the {@code .jp2} file to
  * {@code page.insert_image}. The mask is embedded as a 1-bit {@code /SMask}:
- * JBIG2 ({@code jbig2 -p} output) when jbig2enc is available, otherwise as
- * CCITT Group 4, which is what the Python tool's PNG-mask fallback becomes
- * inside PDFs as well.</p>
+ * CCITT Group 4 (default) or Flate, and JBIG2 ({@code jbig2 -p} output) when
+ * jbig2enc is available.</p>
+ *
+ * <p>With only an {@code /SMask}, a PDF has two image XObjects per layer pair:
+ * viewers such as WPS, Foxit or Acrobat that list "images" on a page show the
+ * foreground and the background and nothing that looks like the mask (PDFBox
+ * does not even list the {@code /SMask}). The masks are still there: the
+ * foreground is an RGBA image whose pixels are the mask bits.</p>
  */
 final class MrcImages {
 
@@ -132,6 +138,10 @@ final class MrcImages {
         mask.getCOSObject().setInt(COSName.HEIGHT, r.height());
         mask.getCOSObject().setItem(COSName.BITS_PER_COMPONENT, COSInteger.ONE);
         mask.getCOSObject().setItem(COSName.COLORSPACE, PDDeviceGray.INSTANCE);
+        // Mask bits are 1 for text; as an SMask they must decode to white
+        // (opaque). JBIG2 decodes 0 as black and 1 as white, so nothing is
+        // needed there; CCITT and Flate decode 1 as black and get /Decode
+        // [1 0] to invert.
         if (r.maskJbig2() != null) {
             mask.getCOSObject().setItem(COSName.FILTER, COSName.JBIG2_DECODE);
             write(mask, r.maskJbig2());
@@ -140,6 +150,10 @@ final class MrcImages {
             writeG4(doc, mask, r.mask());
         } else if (r.mask() != null) {
             mask.getCOSObject().setItem(COSName.FILTER, COSName.FLATE_DECODE);
+            COSArray decode = new COSArray();
+            decode.add(COSInteger.ONE);
+            decode.add(COSInteger.ZERO);
+            mask.getCOSObject().setItem(COSName.DECODE, decode);
             write(mask, ImageCodec.deflate(Png1Bit.packBits(r.mask())));
         } else {
             // No mask at all: fully opaque
