@@ -1,6 +1,5 @@
 /*
- * mrc4j - Java port of archive-pdf-tools MRC compression.
- * Copyright (C) 2020-2021 Internet Archive
+ * mrc4j - MRC image compression for PDFs.
  * Copyright (C) 2026 mrc4j contributors
  *
  * This program is free software: you can redistribute it and/or modify
@@ -18,72 +17,219 @@
  */
 package com.xulihang.mrc4j;
 
-import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.List;
 
+import org.opencv.core.Core;
+import org.opencv.core.CvType;
+import org.opencv.core.Mat;
+import org.opencv.core.Scalar;
+import org.opencv.core.Size;
+import org.opencv.imgproc.Imgproc;
 
 /**
- * Port of the image "optimising" step of archive-pdf-tools
- * ({@code cython/optimiser.pyx}).
+ * Builds the MRC colour layers and cleans up the mask.
  *
- * <p>For the foreground layer, pixels <em>outside</em> the text mask are
- * replaced by the mean of the masked pixels around them (and of the pixels
- * already computed above/left), so the foreground image consists of text on a
- * smooth background that resembles the surrounding artwork. For the background
- * layer the same is done with the inverted mask. This radiates the interesting
- * content into the area the other layer covers, which keeps edges smooth and
- * makes both layers much easier (and cheaper) to compress.</p>
+ * <p>The foreground keeps the ink pixels and fills the rest with the local
+ * average of nearby ink colours (a normalised Gaussian blur), so flat areas
+ * stay flat and compress well. The background replaces ink with the local
+ * average of the surrounding paper/artwork. Tiny connected components are
+ * dropped from the mask, which keeps dots and accents intact.</p>
  */
 public final class Optimiser {
+
+    /** Radius (in pixels) over which ink colours are spread in the foreground. */
+    private static final double FOREGROUND_SIGMA = 2.0;
+
+    /** Radius used to fill the background under the ink. */
+    private static final double BACKGROUND_SIGMA = 2.0;
+
+    /** Normalised weights below this are filled with a flat colour instead. */
+    private static final double LOW_WEIGHT = 0.004;
 
     private Optimiser() {
     }
 
     /**
-     * Replaces every pixel outside the mask by the mean of masked pixels in an
-     * {@code nSize} pixel window and of already processed pixels above/left of
-     * it. Works for grayscale and RGB(A) buffers alike.
+     * Foreground layer: masked pixels keep their sampled colour, everything
+     * else receives the local average of the masked pixels around it.
+     *
+     * @param background the matching background layer, used where no ink is
+     *                   close enough to supply a colour
      */
-    public static PixelBuffer optimise(PixelBuffer image, Mask mask, int nSize) {
-        int w = image.getWidth();
-        int h = image.getHeight();
-        int ch = image.getChannels();
-        byte[] in = image.getData();
-        PixelBuffer out = image.copy();
-        byte[] o = out.getData();
-        for (int y = 0; y < h; y++) {
-            for (int x = 0; x < w; x++) {
-                if (mask.get(x, y)) {
-                    continue;
-                }
-                long[] acc = new long[ch];
-                int n = 0;
-                for (int yy = Math.max(0, y - nSize); yy < Math.min(h, y + nSize); yy++) {
-                    for (int xx = Math.max(0, x - nSize); xx < Math.min(w, x + nSize); xx++) {
-                        if (mask.get(xx, yy)) {
-                            int p = (yy * w + xx) * ch;
-                            for (int c = 0; c < ch; c++) {
-                                acc[c] += in[p + c] & 0xff;
-                            }
-                            n++;
-                        }
-                    }
-                }
-                for (int yy = Math.max(0, y - nSize); yy < y; yy++) {
-                    for (int xx = Math.max(0, x - nSize); xx < x; xx++) {
-                        int p = (yy * w + xx) * ch;
-                        for (int c = 0; c < ch; c++) {
-                            acc[c] += o[p + c] & 0xff;
-                        }
-                        n++;
-                    }
-                }
-                int p = (y * w + x) * ch;
-                for (int c = 0; c < ch; c++) {
-                    o[p + c] = (byte) (n > 0 ? acc[c] / n : 0);
-                }
-            }
+    public static PixelBuffer foreground(PixelBuffer image, Mask mask,
+                                         PixelBuffer background) {
+        Cv.load();
+        Mat src = Cv.rgbMat(image);
+        Mat bg = Cv.rgbMat(background);
+        Mat m = Cv.maskMat(mask);
+        int channels = src.channels();
+
+        List<Mat> srcChannels = new ArrayList<>();
+        List<Mat> bgChannels = new ArrayList<>();
+        Core.split(src, srcChannels);
+        Core.split(bg, bgChannels);
+
+        Mat inkWeight = new Mat();
+        m.convertTo(inkWeight, CvType.CV_32F, 1.0 / 255.0);
+        Mat blurredWeight = new Mat();
+        Imgproc.GaussianBlur(inkWeight, blurredWeight, new Size(0, 0), FOREGROUND_SIGMA);
+        Mat lowWeight = new Mat(blurredWeight.rows(), blurredWeight.cols(),
+                blurredWeight.type(), new Scalar(LOW_WEIGHT));
+        Mat lowMask = new Mat();
+        Core.compare(blurredWeight, lowWeight, lowMask, Core.CMP_LT);
+
+        List<Mat> outChannels = new ArrayList<>();
+        for (int c = 0; c < channels; c++) {
+            Mat channel = new Mat();
+            srcChannels.get(c).convertTo(channel, CvType.CV_32F);
+            Mat masked = new Mat();
+            Core.multiply(channel, inkWeight, masked);
+            Mat numerator = new Mat();
+            Imgproc.GaussianBlur(masked, numerator, new Size(0, 0), FOREGROUND_SIGMA);
+
+            Mat filled = new Mat();
+            Core.divide(numerator, blurredWeight, filled);
+            // Too far from any ink: fall back to the inpainted background.
+            Mat backgroundChannel = new Mat();
+            bgChannels.get(c).convertTo(backgroundChannel, CvType.CV_32F);
+            backgroundChannel.copyTo(filled, lowMask);
+            // Ink pixels keep the exact sampled colour.
+            channel.copyTo(filled, m);
+
+            Mat result = new Mat();
+            filled.convertTo(result, CvType.CV_8U);
+            outChannels.add(result);
+
+            channel.release();
+            masked.release();
+            numerator.release();
+            filled.release();
+            backgroundChannel.release();
         }
-        return out;
+
+        Mat out = new Mat();
+        Core.merge(outChannels, out);
+        PixelBuffer pixels = Cv.pixels(out);
+
+        releaseAll(srcChannels);
+        releaseAll(bgChannels);
+        releaseAll(outChannels);
+        out.release();
+        lowMask.release();
+        lowWeight.release();
+        blurredWeight.release();
+        inkWeight.release();
+        m.release();
+        bg.release();
+        src.release();
+        return pixels;
+    }
+
+    /**
+     * Background layer: ink pixels are replaced by the local average of the
+     * surrounding paper/artwork (a normalised blur of the non-ink pixels);
+     * non-ink pixels are left exactly as scanned.
+     */
+    public static PixelBuffer background(PixelBuffer image, Mask mask) {
+        Cv.load();
+        Mat src = Cv.rgbMat(image);
+        Mat ink = Cv.maskMat(mask);
+        // Remove one pixel of anti-aliased edge around the ink as well, so the
+        // background does not keep grey fringes around the glyphs.
+        Mat inkForBackground = new Mat();
+        Imgproc.dilate(ink, inkForBackground,
+                Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(3, 3)));
+        Mat paper = new Mat();
+        Core.bitwise_not(inkForBackground, paper);
+        Mat paperWeight = new Mat();
+        paper.convertTo(paperWeight, CvType.CV_32F, 1.0 / 255.0);
+        Mat weight = new Mat();
+        Imgproc.GaussianBlur(paperWeight, weight, new Size(0, 0), BACKGROUND_SIGMA);
+        Mat lowWeight = new Mat(weight.rows(), weight.cols(), weight.type(),
+                new Scalar(LOW_WEIGHT));
+        Mat lowMask = new Mat();
+        Core.compare(weight, lowWeight, lowMask, Core.CMP_LT);
+        // Flat fallback used where a stretch of ink has no paper nearby.
+        Scalar paperMean = Core.mean(src, paper);
+
+        int channels = src.channels();
+        List<Mat> srcChannels = new ArrayList<>();
+        Core.split(src, srcChannels);
+        List<Mat> outChannels = new ArrayList<>();
+        for (int c = 0; c < channels; c++) {
+            Mat channel = new Mat();
+            srcChannels.get(c).convertTo(channel, CvType.CV_32F);
+            Mat masked = new Mat();
+            Core.multiply(channel, paperWeight, masked);
+            Mat numerator = new Mat();
+            Imgproc.GaussianBlur(masked, numerator, new Size(0, 0), BACKGROUND_SIGMA);
+
+            Mat filled = new Mat();
+            Core.divide(numerator, weight, filled);
+            double flat = c < paperMean.val.length ? paperMean.val[c] : paperMean.val[0];
+            filled.setTo(new Scalar(flat), lowMask);
+            Mat filled8 = new Mat();
+            filled.convertTo(filled8, CvType.CV_8U);
+
+            Mat result = new Mat();
+            srcChannels.get(c).copyTo(result);
+            filled8.copyTo(result, inkForBackground);
+            outChannels.add(result);
+
+            channel.release();
+            masked.release();
+            numerator.release();
+            filled.release();
+            filled8.release();
+        }
+
+        Mat out = new Mat();
+        Core.merge(outChannels, out);
+        PixelBuffer pixels = Cv.pixels(out);
+
+        releaseAll(srcChannels);
+        releaseAll(outChannels);
+        out.release();
+        lowMask.release();
+        lowWeight.release();
+        weight.release();
+        paperWeight.release();
+        paper.release();
+        inkForBackground.release();
+        ink.release();
+        src.release();
+        return pixels;
+    }
+
+    /** Remove isolated mask speckles, keeping dots, accents and line work. */
+    public static void denoise(Mask mask) {
+        Cv.load();
+        Mat m = Cv.maskMat(mask);
+        Mat labels = new Mat();
+        Mat stats = new Mat();
+        Mat centroids = new Mat();
+        int count = Imgproc.connectedComponentsWithStats(m, labels, stats, centroids,
+                8, CvType.CV_32S);
+
+        int area = mask.getWidth() * mask.getHeight();
+        int[] labelData = new int[area];
+        labels.get(0, 0, labelData);
+        int[] statsData = new int[count * 5];
+        stats.get(0, 0, statsData);
+
+        byte[] out = mask.getData();
+        for (int i = 0; i < labelData.length; i++) {
+            int label = labelData[i];
+            boolean keep = label != 0
+                    && statsData[label * 5 + Imgproc.CC_STAT_AREA] > 2;
+            out[i] = (byte) (keep ? 1 : 0);
+        }
+
+        centroids.release();
+        stats.release();
+        labels.release();
+        m.release();
     }
 
     /** Drop the alpha channel of an RGBA buffer, keeping only RGB. */
@@ -102,28 +248,9 @@ public final class Optimiser {
         return out;
     }
 
-    /**
-     * Port of {@code fast_mask_denoise}: drops mask pixels that have fewer than
-     * {@code minCnt} set neighbours in a (2*nSize+1)^2 window. The mask is
-     * modified in place, like in the original.
-     */
-    public static void fastMaskDenoise(Mask mask, int minCnt, int nSize) {
-        int width = mask.getWidth();
-        int height = mask.getHeight();
-        byte[] m = mask.getData();
-        for (int y = nSize; y < height - nSize; y++) {
-            for (int x = nSize; x < width - nSize; x++) {
-                if (m[y * width + x] != 0) {
-                    int cnt = 0;
-                    for (int hh = -nSize; hh <= nSize; hh++) {
-                        int row = (y - hh) * width;
-                        for (int ww = -nSize; ww <= nSize; ww++) {
-                            cnt += m[row + x - ww];
-                        }
-                    }
-                    m[y * width + x] = (byte) ((cnt - 1) >= minCnt ? 1 : 0);
-                }
-            }
+    private static void releaseAll(List<Mat> mats) {
+        for (Mat mat : mats) {
+            mat.release();
         }
     }
 }

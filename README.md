@@ -1,17 +1,17 @@
 # mrc4j
 
-Java (11+) port of the image compression part of
-[internetarchive/archive-pdf-tools](https://github.com/internetarchive/archive-pdf-tools)
-(`bin/compress-pdf-images` / `internetarchivepdf/mrc.py`), package
-`com.xulihang.mrc4j`.
+MRC (Mixed Raster Content) image compression for PDFs, implemented in
+Java 11+ with OpenCV, package `com.xulihang.mrc4j`.
 
 Each image on each page of a PDF is split into three MRC layers, compressed,
 and put back where the original image was:
 
-* **mask** – 1-bit text/line-art mask (Sauvola binarisation + speckle removal)
-* **foreground** – masked pixels kept at full resolution, everything else
-  replaced by averaged surrounding content (so it compresses well)
-* **background** – inverted mask, downsampled (`--bg-downsample 3` by default)
+* **mask** – 1-bit ink mask (Sauvola binarisation + connected-component
+  speckle filter)
+* **foreground** – ink pixels kept at full resolution, everything else
+  filled with nearby ink colours (so it compresses well)
+* **background** – ink removed by local averaging, downsampled
+  (`--bg-downsample 3` by default)
 
 ## How it compares
 
@@ -98,8 +98,10 @@ mvn -DskipTests package
 ```
 
 Produces `target/mrc4j-1.0-SNAPSHOT.jar` (self-contained; PDFBox, JAI
-JPEG2000 and jbig2 decoders are shaded in). Maven 3.6+ and JDK 11+ are
-required.
+JPEG2000, jbig2 decoders and the OpenCV natives are shaded in). Maven 3.6+
+and JDK 11+ are required. The decomposition uses the OpenCV Java bindings
+(`org.openpnp:opencv`); their native libraries are bundled in the shaded jar
+and extracted on first use.
 
 ### Thin jar for hosts with existing dependencies
 
@@ -112,7 +114,8 @@ mvn -Pthin package
 ```
 
 The resulting `target/mrc4j-1.0-SNAPSHOT.jar` (~67 KB) relies on the host's
-existing PDFBox/JAI jars. Do not add the shaded jar at the same time.
+existing PDFBox/JAI jars and the OpenCV Java bindings
+(`org.openpnp:opencv`). Do not add the shaded jar at the same time.
 
 For page-by-page processing, `Mrc4j.addPageImageFromFile` compresses a single
 image and draws the background and foreground (with its mask) into an already
@@ -180,6 +183,8 @@ Options:
 | `--fg-downsample N` | foreground downsample factor (1 = full resolution) |
 | `--bg-downsample N` | background downsample factor (3) |
 | `--dpi N` | fallback DPI for the Sauvola window (300) |
+| `--sauvola-k N` | Sauvola sensitivity; higher values produce a thinner mask (0.34) |
+| `--no-denoise` | keep isolated mask speckles |
 | `--dump DIR` | write the MRC layers as PNG files |
 | `--debug` | per-image timings |
 
@@ -213,9 +218,10 @@ Other entry points:
 
 ## Status
 
-Working: PDF parsing, image extraction/replacement, MRC decomposition,
-Sauvola thresholding, layer optimising, background downsampling, JBIG2 /
-CCITT G4 / Kakadu / OpenJPEG / Grok / Java-JAI encoders, Flate fallbacks.
+Working: PDF parsing, image extraction/replacement, OpenCV-based MRC
+decomposition (Sauvola binarisation, foreground/background layer construction,
+mask denoising), background/foreground downsampling, JBIG2 / CCITT G4 /
+Kakadu / OpenJPEG / Grok / Java-JAI encoders, Flate fallbacks.
 
 Fixed (2026-11-19):
 

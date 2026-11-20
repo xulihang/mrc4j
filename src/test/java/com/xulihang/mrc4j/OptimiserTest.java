@@ -1,6 +1,5 @@
 /*
- * mrc4j - Java port of archive-pdf-tools MRC compression.
- * Copyright (C) 2020-2021 Internet Archive
+ * mrc4j - MRC image compression for PDFs.
  * Copyright (C) 2026 mrc4j contributors
  *
  * This program is free software: you can redistribute it and/or modify
@@ -18,23 +17,86 @@
  */
 package com.xulihang.mrc4j;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
 class OptimiserTest {
 
-    @Test
-    void spreadsMaskedPixelIntoWindow() {
-        PixelBuffer img = new PixelBuffer(4, 1, 1);
-        for (int x = 0; x < 4; x++) {
-            img.put(x, 0, 0, 200);
+    private static PixelBuffer white(int width, int height) {
+        PixelBuffer image = new PixelBuffer(width, height, 1);
+        java.util.Arrays.fill(image.getData(), (byte) 255);
+        return image;
+    }
+
+    private static PixelBuffer blackBlock(PixelBuffer image, int x, int y,
+                                          int width, int height) {
+        for (int yy = y; yy < y + height; yy++) {
+            for (int xx = x; xx < x + width; xx++) {
+                image.put1(xx, yy, 0);
+            }
         }
-        Mask mask = new Mask(4, 1);
-        mask.set(2, 0, true);
-        PixelBuffer out = Optimiser.optimise(img, mask, 1);
-        // x=2 is masked and keeps its value; x=3 sees the masked pixel, x=0/1 see nothing
-        assertEquals(200, out.get(2, 0, 0));
-        assertEquals(200, out.get(3, 0, 0));
+        return image;
+    }
+
+    private static Mask blockMask(int width, int height, int x, int y,
+                                  int blockWidth, int blockHeight) {
+        Mask mask = new Mask(width, height);
+        for (int yy = y; yy < y + blockHeight; yy++) {
+            for (int xx = x; xx < x + blockWidth; xx++) {
+                mask.set(xx, yy, true);
+            }
+        }
+        return mask;
+    }
+
+    @Test
+    void backgroundRemovesInk() {
+        PixelBuffer image = blackBlock(white(20, 20), 8, 8, 4, 4);
+        Mask mask = blockMask(20, 20, 8, 8, 4, 4);
+
+        PixelBuffer background = Optimiser.background(image, mask);
+
+        // The black block is replaced by the surrounding white paper.
+        assertTrue(background.get1(9, 9) > 200,
+                "inpainted pixel was " + background.get1(9, 9));
+    }
+
+    @Test
+    void foregroundDiffusesInkColour() {
+        PixelBuffer image = blackBlock(white(20, 20), 8, 8, 4, 4);
+        Mask mask = blockMask(20, 20, 8, 8, 4, 4);
+
+        PixelBuffer background = Optimiser.background(image, mask);
+        PixelBuffer foreground = Optimiser.foreground(image, mask, background);
+
+        // Ink pixels keep their exact colour.
+        assertTrue(foreground.get1(9, 9) < 20);
+        // A pixel next to the ink receives a dark local average.
+        assertTrue(foreground.get1(6, 9) < 200,
+                "near ink pixel was " + foreground.get1(6, 9));
+        // Far away the background fill is used.
+        assertTrue(foreground.get1(0, 0) > 200);
+    }
+
+    @Test
+    void denoiseDropsSinglePixelsAndKeepsDots() {
+        Mask mask = new Mask(12, 12);
+        mask.set(5, 5, true);
+        for (int y = 1; y <= 3; y++) {
+            for (int x = 1; x <= 3; x++) {
+                mask.set(x, y, true);
+            }
+        }
+
+        Optimiser.denoise(mask);
+
+        assertFalse(mask.get(5, 5));
+        for (int y = 1; y <= 3; y++) {
+            for (int x = 1; x <= 3; x++) {
+                assertTrue(mask.get(x, y), "dot pixel " + x + "," + y + " was dropped");
+            }
+        }
     }
 }

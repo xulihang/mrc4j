@@ -1,6 +1,5 @@
 /*
- * mrc4j - Java port of archive-pdf-tools MRC compression.
- * Copyright (C) 2020-2021 Internet Archive
+ * mrc4j - MRC image compression for PDFs.
  * Copyright (C) 2026 mrc4j contributors
  *
  * This program is free software: you can redistribute it and/or modify
@@ -19,25 +18,20 @@
 package com.xulihang.mrc4j;
 
 /**
- * Port of {@code create_mrc_hocr_components()} in archive-pdf-tools' mrc.py.
+ * Splits a page image into MRC components with OpenCV:
  *
- * <p>Splits a page image into the MRC layers:</p>
  * <ol>
- *   <li>a 1-bit <b>mask</b> marking text/line-art pixels,</li>
- *   <li>a <b>foreground</b> layer that keeps the masked pixels and replaces
- *       everything else with nearby colours, and</li>
- *   <li>a <b>background</b> layer that keeps only the non-masked pixels, with
- *       the masked content filled in from its surroundings.</li>
+ *   <li>a 1-bit <b>mask</b> marking ink (text and line art), obtained with
+ *       Sauvola binarisation and a median speckle filter,</li>
+ *   <li>a <b>foreground</b> layer that keeps the ink colours and fills the
+ *       rest with nearby ink colours (normalised blur),</li>
+ *   <li>a <b>background</b> layer where ink is removed by inpainting and the
+ *       remaining artwork and paper texture are kept.</li>
  * </ol>
- *
- * <p>Fully annotation-aware (hOCR) pages are not supported here: the mask is
- * derived from the image alone using Sauvola binarisation plus the same noise
- * handling as the Python tool (so it behaves like running
- * {@code bin/compress-pdf-images} without an hOCR file).</p>
  */
 public final class MrcDecomposer {
 
-    /** Parameters that mirror the defaults used by bin/compress-pdf-images. */
+    /** Parameters that control the decomposition. */
     public static final class Options {
         /** DPI of the image; drives the Sauvola window size (dpi / 4). */
         public int dpi = 300;
@@ -45,7 +39,7 @@ public final class MrcDecomposer {
         public int bgDownsample = 3;
         /** Downsampling factor applied to the foreground layer (none by default). */
         public int fgDownsample = 1;
-        /** Remove isolated mask speckles (DENOISE_FAST, as used by the tool). */
+        /** Remove isolated mask speckles with a 3x3 median filter. */
         public boolean denoiseMask = true;
         /** Sauvola k parameter used for the global page threshold. */
         public double sauvolaK = 0.34;
@@ -102,46 +96,38 @@ public final class MrcDecomposer {
     }
 
     public static Components decompose(PixelBuffer image, Options options) {
-        PixelBuffer gray = image.toGrayscale();
+        Cv.load();
         int width = image.getWidth();
         int height = image.getHeight();
 
         // --- mask -----------------------------------------------------------
-        PixelBuffer blurred = gray;
-        double sigmaEst = NoiseEstimator.meanEstimateSigma(gray);
-        if (sigmaEst > 1.0) {
-            blurred = gray.gaussianFilter(sigmaEst * 0.1, 4);
+        PixelBuffer gray = image.toGrayscale();
+        double sigmaEstimate = NoiseEstimator.estimateSigma(gray);
+        if (sigmaEstimate > 1.0) {
+            gray = Cv.gaussianBlur(gray, Math.max(0.5, sigmaEstimate * 0.1));
         }
-        Mask mask = Sauvola.thresholdImage(blurred, sauvolaWindow(options.dpi), options.sauvolaK, 128);
+        Mask mask = Sauvola.thresholdImage(gray, sauvolaWindow(options.dpi),
+                options.sauvolaK, 128);
         if (options.denoiseMask) {
-            Optimiser.fastMaskDenoise(mask, 4, 2);
+            Optimiser.denoise(mask);
         }
 
-        // --- foreground ------------------------------------------------------
-        // Pillow modes other than L/RGB are mapped to RGB first; the mask itself
-        // is broadcast over the alpha channel untouched (as in numpy).
-        PixelBuffer fgSource = image.getChannels() == 1 || image.getChannels() == 3
-                ? image : Optimiser.rgbOnly(image);
-        PixelBuffer fg = Optimiser.optimise(fgSource, mask, 3);
+        // --- colour layers ---------------------------------------------------
+        PixelBuffer source = image.getChannels() == 4 ? Optimiser.rgbOnly(image) : image;
+        PixelBuffer background = Optimiser.background(source, mask);
+        PixelBuffer foreground = Optimiser.foreground(source, mask, background);
+
         if (options.fgDownsample > 1) {
-            int wDown = (int) (width / (double) options.fgDownsample);
-            int hDown = (int) (height / (double) options.fgDownsample);
-            if (wDown > 0 && hDown > 0) {
-                fg = fg.thumbnail(wDown, hDown);
-            }
+            foreground = Cv.resize(foreground,
+                    Math.max(1, (int) (width / (double) options.fgDownsample)),
+                    Math.max(1, (int) (height / (double) options.fgDownsample)));
         }
-
-        // --- background ------------------------------------------------------
-        Mask maskInv = mask.invert();
-        PixelBuffer bg = Optimiser.optimise(fgSource, maskInv, 10);
         if (options.bgDownsample > 1) {
-            int wDown = (int) (width / (double) options.bgDownsample);
-            int hDown = (int) (height / (double) options.bgDownsample);
-            if (wDown > 0 && hDown > 0) {
-                bg = bg.thumbnail(wDown, hDown);
-            }
+            background = Cv.resize(background,
+                    Math.max(1, (int) (width / (double) options.bgDownsample)),
+                    Math.max(1, (int) (height / (double) options.bgDownsample)));
         }
-        return new Components(mask, fg, bg);
+        return new Components(mask, foreground, background);
     }
 
     static int sauvolaWindow(int dpi) {

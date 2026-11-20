@@ -57,6 +57,8 @@ import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
  *   --preset NAME       high | balanced | small | comic | photo
  *   --bg-downsample N   background downsample factor (default 3)
  *   --dpi N             fallback DPI when the image has none (default 300)
+ *   --sauvola-k N       Sauvola sensitivity, 0.2-0.5 (default 0.34)
+ *   --no-denoise        keep isolated mask speckles
  *   --threads N         encoder threads (default 1)
  *   --dump DIR          keep the MRC component images for inspection
  *   --debug             verbose output
@@ -462,6 +464,12 @@ public final class PdfCompressor {
                     break;
                 case "--dpi":
                     o.mrc.dpi = Integer.parseInt(args[++i]);
+                    break;
+                case "--sauvola-k":
+                    o.mrc.sauvolaK = Double.parseDouble(args[++i]);
+                    break;
+                case "--no-denoise":
+                    o.mrc.denoiseMask = false;
                     break;
                 case "--threads":
                     o.jpeg2000.threads = Integer.parseInt(args[++i]);

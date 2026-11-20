@@ -1,6 +1,5 @@
 /*
- * mrc4j - Java port of archive-pdf-tools MRC compression.
- * Copyright (C) 2020-2021 Internet Archive
+ * mrc4j - MRC image compression for PDFs.
  * Copyright (C) 2026 mrc4j contributors
  *
  * This program is free software: you can redistribute it and/or modify
@@ -40,21 +39,7 @@ public final class ComponentDump {
 
         PixelBuffer img = ImageCodec.decode(Files.readAllBytes(in.toPath()));
         PixelBuffer gray = img.toGrayscale();
-
-        // Noise estimate (as estimate_noise() in mrc.py: centre half)
-        int h = gray.getHeight();
-        int w = gray.getWidth();
-        int hs = (int) Math.floor(h / 2.0 - h / 4.0);
-        int he = (int) Math.floor(h / 2.0 + h / 4.0);
-        int ws = (int) Math.floor(w / 2.0 - w / 4.0);
-        int we = (int) Math.floor(w / 2.0 + w / 4.0);
-        if (he == 0 || we == 0) {
-            hs = 0;
-            he = h;
-            ws = 0;
-            we = w;
-        }
-        double sigma = NoiseEstimator.meanEstimateSigma(gray.subImage(ws, hs, we - ws, he - hs));
+        double sigma = NoiseEstimator.estimateSigma(gray);
         System.out.println("sigma_est " + sigma);
 
         MrcDecomposer.Options o = new MrcDecomposer.Options();

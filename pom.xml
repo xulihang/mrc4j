@@ -43,6 +43,12 @@
             <artifactId>jai-imageio-core</artifactId>
             <version>1.4.0</version>
         </dependency>
+        <!-- Native OpenCV for binarisation, inpainting and layer processing -->
+        <dependency>
+            <groupId>org.openpnp</groupId>
+            <artifactId>opencv</artifactId>
+            <version>4.9.0-0</version>
+        </dependency>
         <!-- JBIG2 decoder so the generated PDFs can be read back/tested;
              JBIG2 *encoding* is done by jbig2enc, like the Python tool -->
         <dependency>
@@ -96,6 +102,18 @@
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                             </transformers>
+                            <!-- OpenCV ships native libraries; signed-jar
+                                 metadata would break the shaded jar. -->
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
                         </configuration>
                     </execution>
                 </executions>
