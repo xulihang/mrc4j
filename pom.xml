@@ -10,12 +10,12 @@
     <packaging>jar</packaging>
 
     <name>mrc4j</name>
-    <description>Java port of internetarchive/archive-pdf-tools image compression (MRC) for PDFs</description>
+    <description>MRC (Mixed Raster Content) image compression for PDFs</description>
 
     <licenses>
         <license>
-            <name>GNU Affero General Public License v3.0 or later</name>
-            <url>https://www.gnu.org/licenses/agpl-3.0.html</url>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
             <distribution>repo</distribution>
         </license>
     </licenses>

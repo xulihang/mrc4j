@@ -2,18 +2,17 @@
  * mrc4j - MRC image compression for PDFs.
  * Copyright (C) 2026 mrc4j contributors
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package com.xulihang.mrc4j;
 
@@ -27,8 +26,8 @@ import org.opencv.imgproc.Imgproc;
 /**
  * Builds the MRC colour layers and cleans up the mask.
  *
- * <p>Both colour layers come from the same "radiate" fill used by
- * archive-pdf-tools' {@code optimiser.pyx}: every pixel outside the mask is
+ * <p>Both colour layers come from the same "radiate" fill used by the
+ * reference MRC optimiser: every pixel outside the mask is
  * replaced by the mean of the masked pixels around it plus the pixels already
  * computed above/left of it. The foreground uses the ink mask, so the masked
  * strokes keep their exact colours while the rest is filled with nearby ink
@@ -44,13 +43,13 @@ import org.opencv.imgproc.Imgproc;
  */
 public final class Optimiser {
 
-    /** Window size of the foreground fill (archive-pdf-tools uses 3). */
+    /** Window size of the foreground fill (the reference uses 3). */
     private static final int FOREGROUND_WINDOW = 3;
 
-    /** Window size of the background fill (archive-pdf-tools uses 10). */
+    /** Window size of the background fill (the reference uses 10). */
     private static final int BACKGROUND_WINDOW = 10;
 
-    /** Mask denoising radius and neighbour count (archive-pdf-tools defaults). */
+    /** Mask denoising radius and neighbour count (reference defaults). */
     private static final int DENOISE_RADIUS = 2;
     private static final int DENOISE_MIN_NEIGHBOURS = 4;
 
@@ -204,8 +203,8 @@ public final class Optimiser {
      * <p>This is the reference {@code fast_mask_denoise} rule: a set pixel
      * survives when at least {@value #DENOISE_MIN_NEIGHBOURS} of the other 24
      * pixels in its 5x5 neighbourhood are set too. The outermost two rows and
-     * columns are left untouched, as in archive-pdf-tools. OpenCV computes the
-     * neighbourhood sums.</p>
+     * columns are left untouched, as in the reference implementation. OpenCV
+     * computes the neighbourhood sums.</p>
      */
     public static void denoise(Mask mask) {
         Cv.load();

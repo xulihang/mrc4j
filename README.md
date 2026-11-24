@@ -165,8 +165,8 @@ java -cp target/mrc4j-1.0-SNAPSHOT.jar com.xulihang.mrc4j.PdfCompressor \
 
 `--encoder java` uses the JAI JPEG2000 writer bundled in the jar; `--no-jbig2`
 uses a CCITT Group 4 mask (pass `--mask-compression flate` for Flate). With
-Kakadu and jbig2enc installed, omit both flags to use the same defaults as
-archive-pdf-tools. Add `--preset balanced` (or another profile below) to pick
+Kakadu and jbig2enc installed, omit both flags to use the reference tool's
+defaults. Add `--preset balanced` (or another profile below) to pick
 a quality/size point without tuning individual rates.
 
 Options:
@@ -233,7 +233,7 @@ Other entry points:
 
 Working: PDF parsing, image extraction/replacement, OpenCV-based MRC
 decomposition (Sauvola binarisation, mask denoising, area resampling) and a
-linear-time port of the reference foreground/background fill,
+linear-time implementation of the reference foreground/background fill,
 background/foreground downsampling, JBIG2 / CCITT G4 / Kakadu / OpenJPEG /
 Grok / Java-JAI encoders, Flate fallbacks.
 
@@ -284,11 +284,6 @@ colours and orientation.
 
 ## License
 
-mrc4j is a Java port of the image compression part of
-[archive-pdf-tools](https://github.com/internetarchive/archive-pdf-tools).
-The original code is Copyright (C) 2020-2021 Internet Archive; original authors
-include Merlijn Wajer, Bas Weelinck and contributors.
-
-This project is distributed under the GNU Affero General Public License,
-version 3 or (at your option) any later version. See [LICENSE](LICENSE) and
-[NOTICE](NOTICE).
+mrc4j is licensed under the
+[Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0).
+See [LICENSE](LICENSE) and [NOTICE](NOTICE).

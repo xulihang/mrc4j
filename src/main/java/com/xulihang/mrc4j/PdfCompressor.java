@@ -1,20 +1,18 @@
 /*
- * mrc4j - Java port of archive-pdf-tools MRC compression.
- * Copyright (C) 2020-2021 Internet Archive
+ * mrc4j - MRC image compression for PDFs.
  * Copyright (C) 2026 mrc4j contributors
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package com.xulihang.mrc4j;
 
@@ -30,8 +28,7 @@ import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 
 /**
- * Java port of {@code bin/compress-pdf-images} from Internet Archive's
- * archive-pdf-tools.
+ * MRC image compressor for PDFs.
  *
  * <p>Each image on each page is split into MRC layers (1-bit text mask,
  * foreground, downsampled background), compressed with JPEG2000 (foreground /
@@ -75,7 +72,7 @@ public final class PdfCompressor {
         public String command = "kdu_compress";
         public int fgSlope = 44500;
         public int bgSlope = 44250;
-        /** OpenJPEG/Grok compression ratios (archive-pdf-tools defaults). */
+        /** OpenJPEG/Grok compression ratios (reference defaults). */
         public double fgRate = 750;
         public double bgRate = 500;
         /** Java (JAI) encoder target rates, bits per pixel. */
@@ -374,13 +371,13 @@ public final class PdfCompressor {
     /**
      * Effective DPI for the Sauvola window: the image's own resolution, or the
      * configured fallback for images without one (PDF images often carry no
-     * resolution, unlike the scan images the Python tool works on).
+     * resolution, unlike the scan images the reference tool works on).
      */
     int resolveDpi(PDImageXObject image) {
         float w = image.getWidth();
         // PDF image dictionaries do not have a standard resolution entry, so
         // this is the configured fallback (like the 72 dpi PyMuPDF reports for
-        // PDF images without one; the Python tool then falls back to 51px).
+        // PDF images without one; the reference tool then falls back to 51px).
         return options.mrc.dpi;
     }
 
