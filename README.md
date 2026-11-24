@@ -237,6 +237,10 @@ linear-time port of the reference foreground/background fill,
 background/foreground downsampling, JBIG2 / CCITT G4 / Kakadu / OpenJPEG /
 Grok / Java-JAI encoders, Flate fallbacks.
 
+See [docs/image-quality-evaluation.md](docs/image-quality-evaluation.md) for
+how the output quality is measured (layer reconstruction, masked PSNR, mask
+IoU, multi-scale renders) and the measurements behind the numbers below.
+
 Fixed (2026-11-24):
 
 * Restored the reference wavelet noise estimator (the previous Laplacian
