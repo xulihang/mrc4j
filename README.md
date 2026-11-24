@@ -119,6 +119,13 @@ The resulting `target/mrc4j-1.0-SNAPSHOT.jar` (~67 KB) relies on the host's
 existing PDFBox/JAI jars and the OpenCV Java bindings
 (`org.openpnp:opencv`). Do not add the shaded jar at the same time.
 
+If the host ships the OpenCV native library outside the jar (as ImageTrans
+does with `opencv_java490.dll` next to the application), put its directory on
+`java.library.path` (e.g. `-Djava.library.path=.`) or point
+`-Dmrc4j.opencv.path=<library file>` at it. When the native resources are not
+inside the jar, mrc4j falls back from `OpenCV.loadLocally()` to
+`System.loadLibrary` / `System.load`.
+
 For page-by-page processing, `Mrc4j.addPageImageFromFile` compresses a single
 image and draws the background and foreground (with its mask) into an already
 open `PDPageContentStream`:
