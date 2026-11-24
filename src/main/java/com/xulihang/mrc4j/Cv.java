@@ -16,6 +16,7 @@
  */
 package com.xulihang.mrc4j;
 
+import org.opencv.core.Core;
 import org.opencv.core.CvType;
 import org.opencv.core.Mat;
 import org.opencv.core.Size;
@@ -27,12 +28,33 @@ import org.opencv.imgproc.Imgproc;
  */
 final class Cv {
 
+    private static boolean loaded;
+
     private Cv() {
     }
 
-    /** Load the bundled OpenCV natives (idempotent). */
-    static void load() {
-        nu.pattern.OpenCV.loadLocally();
+    /**
+     * Load the OpenCV native libraries (idempotent). The shaded jar bundles
+     * them, so extract-and-load works out of the box. Hosts such as ImageTrans
+     * ship the Java bindings without the native resources and provide the
+     * library on {@code java.library.path}; fall back to that, or to an
+     * explicit path in {@code mrc4j.opencv.path}.
+     */
+    static synchronized void load() {
+        if (loaded) {
+            return;
+        }
+        try {
+            nu.pattern.OpenCV.loadLocally();
+        } catch (Throwable bundledFailure) {
+            String path = System.getProperty("mrc4j.opencv.path");
+            if (path != null && !path.isEmpty()) {
+                System.load(path);
+            } else {
+                System.loadLibrary(Core.NATIVE_LIBRARY_NAME);
+            }
+        }
+        loaded = true;
     }
 
     /** Grayscale or RGB Mat from a pixel buffer; an alpha channel is dropped. */
