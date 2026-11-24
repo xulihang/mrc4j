@@ -237,6 +237,27 @@ public final class Optimiser {
         m.release();
     }
 
+    /**
+     * Grow the mask by {@code radius} pixels with a square structuring element.
+     * Used to clear the anti-aliased fringe around strokes from the background
+     * before that layer is downsampled (where it would otherwise turn into a
+     * light halo).
+     */
+    public static Mask dilate(Mask mask, int radius) {
+        if (radius <= 0) {
+            return mask;
+        }
+        Cv.load();
+        Mat m = Cv.maskMat(mask);
+        Mat dst = new Mat();
+        Imgproc.dilate(m, dst, Imgproc.getStructuringElement(Imgproc.MORPH_RECT,
+                new Size(2 * radius + 1, 2 * radius + 1)));
+        Mask out = Cv.mask(dst);
+        dst.release();
+        m.release();
+        return out;
+    }
+
     /** Drop the alpha channel of an RGBA buffer, keeping only RGB. */
     public static PixelBuffer rgbOnly(PixelBuffer image) {
         if (!image.hasAlpha()) {

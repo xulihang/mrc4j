@@ -56,6 +56,7 @@ import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
  *   --encoder NAME      kakadu | openjpeg | grok | java | none
  *   --preset NAME       high | balanced | small | comic | photo
  *   --bg-downsample N   background downsample factor (default 3)
+ *   --bg-dilate N       background fill mask growth, -1 = auto (default -1)
  *   --dpi N             fallback DPI when the image has none (default 300)
  *   --sauvola-k N       Sauvola sensitivity, 0.2-0.5 (default 0.34)
  *   --no-denoise        keep isolated mask speckles
@@ -458,6 +459,9 @@ public final class PdfCompressor {
                     break;
                 case "--bg-downsample":
                     o.mrc.bgDownsample = Integer.parseInt(args[++i]);
+                    break;
+                case "--bg-dilate":
+                    o.mrc.bgDilate = Integer.parseInt(args[++i]);
                     break;
                 case "--fg-downsample":
                     o.mrc.fgDownsample = Integer.parseInt(args[++i]);

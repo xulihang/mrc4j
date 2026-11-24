@@ -18,6 +18,7 @@
 package com.xulihang.mrc4j;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -79,6 +80,24 @@ class OptimiserTest {
         // Far away a flat ink colour is used (that area is hidden by the mask).
         assertTrue(foreground.get1(0, 0) < 20,
                 "far ink pixel was " + foreground.get1(0, 0));
+    }
+
+    @Test
+    void dilateGrowsTheMaskByTheGivenRadius() {
+        Mask mask = new Mask(11, 11);
+        mask.set(5, 5, true);
+
+        Mask one = Optimiser.dilate(mask, 1);
+        assertTrue(one.get(4, 4));
+        assertTrue(one.get(6, 6));
+        assertFalse(one.get(3, 5));
+
+        Mask two = Optimiser.dilate(mask, 2);
+        assertTrue(two.get(3, 3));
+        assertFalse(two.get(2, 5));
+
+        // Radius 0 is a no-op and returns the same mask.
+        assertSame(mask, Optimiser.dilate(mask, 0));
     }
 
     @Test

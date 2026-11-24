@@ -184,6 +184,7 @@ Options:
 | `--fg-bpp N` / `--bg-bpp N` | Java (JAI) encoder rates in bits/pixel (0.4 / 0.2) |
 | `--fg-downsample N` | foreground downsample factor (1 = full resolution) |
 | `--bg-downsample N` | background downsample factor (3) |
+| `--bg-dilate N` | grow the background fill mask by N px; `-1` = auto, `0` keeps the anti-aliased fringe (see below) |
 | `--dpi N` | fallback DPI for the Sauvola window (300) |
 | `--sauvola-k N` | Sauvola sensitivity; higher values produce a thinner mask (0.34) |
 | `--no-denoise` | keep isolated mask speckles |
@@ -213,6 +214,16 @@ about 70 KB; on the magazine sample above `balanced` is about 120 KB. The
 `comic` profile deliberately keeps the colour foreground at full resolution,
 because downsampling it softens coloured line art.
 
+When the background is downsampled (every preset except `high`), the
+anti-aliased grey fringe around each stroke would be averaged with the paper
+and read as a light halo. To avoid it, the background is filled under a mask
+grown by `bg-downsample - 1` pixels, so it consists of clean paper right up to
+the text and the binary text mask defines the edge (the same effect as the
+GdPicture.NET MRC sample). This makes text crisper at the cost of the faint
+grey edge pixels; `--bg-dilate 0` keeps the reference behaviour and
+`--bg-dilate N` sets the radius explicitly. `high` (no downsampling) keeps the
+exact anti-aliased pixels and stays lossless.
+
 Other entry points:
 
 * `com.xulihang.mrc4j.ComponentDump <image> <outDir> [dpi]` – dump the
@@ -231,8 +242,11 @@ Fixed (2026-11-24):
 * Restored the reference wavelet noise estimator (the previous Laplacian
   estimate always fired on text/artwork and blurred the page before
   binarisation, shifting every mask edge).
-* The background layer no longer dilates the mask, so anti-aliased glyph and
-  line-art edges remain exactly as scanned instead of showing a light halo.
+* The background layer no longer grows the mask at full resolution, so
+  anti-aliased glyph and line-art edges stay exactly as scanned. For a
+  downsampled background the opposite is needed: a grown fill mask clears the
+  fringe that would otherwise become a light halo, which keeps text crisp like
+  GdPicture.NET's MRC output (`--bg-dilate`, auto by default).
 * The foreground/background fill follows the reference "radiate" averaging
   (masked-pixel window mean plus the already computed top-left quadrant),
   computed incrementally in linear time. On the form and comic samples this

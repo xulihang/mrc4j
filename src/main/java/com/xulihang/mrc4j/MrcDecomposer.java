@@ -37,6 +37,14 @@ public final class MrcDecomposer {
         public int dpi = 300;
         /** Downsampling factor applied to the background layer (3 in the tool). */
         public int bgDownsample = 3;
+        /**
+         * Radius in pixels by which the background fill mask is grown. A
+         * positive value clears that much anti-aliased fringe from the
+         * background; {@code -1} picks {@code bgDownsample - 1}, so the fringe
+         * does not turn into a light halo after downsampling. Set 0 to keep
+         * the reference behaviour (exact fringe in the background).
+         */
+        public int bgDilate = -1;
         /** Downsampling factor applied to the foreground layer (none by default). */
         public int fgDownsample = 1;
         /** Drop isolated mask speckles with the 5x5 neighbourhood rule. */
@@ -52,6 +60,7 @@ public final class MrcDecomposer {
             Options o = new Options();
             o.dpi = dpi;
             o.bgDownsample = bgDownsample;
+            o.bgDilate = bgDilate;
             o.fgDownsample = fgDownsample;
             o.denoiseMask = denoiseMask;
             o.sauvolaK = sauvolaK;
@@ -115,7 +124,16 @@ public final class MrcDecomposer {
 
         // --- colour layers ---------------------------------------------------
         PixelBuffer source = image.getChannels() == 4 ? Optimiser.rgbOnly(image) : image;
-        PixelBuffer background = Optimiser.background(source, mask);
+        // At full resolution the background keeps the exact anti-aliased edge
+        // pixels and the layers reproduce the scan. Once the background is
+        // downsampled, that fringe is averaged with the paper and reads as a
+        // light halo around every stroke. Clear a slightly larger area from
+        // the background instead (like GdPicture's MRC), so the background is
+        // paper right up to the mask and the text stays crisp at reduced size.
+        int fillDilate = options.bgDilate >= 0 ? options.bgDilate
+                : Math.max(0, options.bgDownsample - 1);
+        Mask backgroundMask = Optimiser.dilate(mask, fillDilate);
+        PixelBuffer background = Optimiser.background(source, backgroundMask);
         PixelBuffer foreground = Optimiser.foreground(source, mask, background);
 
         if (options.fgDownsample > 1) {
