@@ -22,11 +22,11 @@ package com.xulihang.mrc4j;
  *
  * <ol>
  *   <li>a 1-bit <b>mask</b> marking ink (text and line art), obtained with
- *       Sauvola binarisation and a median speckle filter,</li>
+ *       Sauvola binarisation and a 5x5 neighbourhood speckle filter,</li>
  *   <li>a <b>foreground</b> layer that keeps the ink colours and fills the
- *       rest with nearby ink colours (normalised blur),</li>
- *   <li>a <b>background</b> layer where ink is removed by inpainting and the
- *       remaining artwork and paper texture are kept.</li>
+ *       rest with the averaged nearby ink colours (radiating fill),</li>
+ *   <li>a <b>background</b> layer where ink is removed by local averaging and
+ *       the remaining artwork and paper texture are kept exactly.</li>
  * </ol>
  */
 public final class MrcDecomposer {
@@ -39,7 +39,7 @@ public final class MrcDecomposer {
         public int bgDownsample = 3;
         /** Downsampling factor applied to the foreground layer (none by default). */
         public int fgDownsample = 1;
-        /** Remove isolated mask speckles with a 3x3 median filter. */
+        /** Drop isolated mask speckles with the 5x5 neighbourhood rule. */
         public boolean denoiseMask = true;
         /** Sauvola k parameter used for the global page threshold. */
         public double sauvolaK = 0.34;
@@ -96,15 +96,16 @@ public final class MrcDecomposer {
     }
 
     public static Components decompose(PixelBuffer image, Options options) {
-        Cv.load();
         int width = image.getWidth();
         int height = image.getHeight();
 
         // --- mask -----------------------------------------------------------
         PixelBuffer gray = image.toGrayscale();
-        double sigmaEstimate = NoiseEstimator.estimateSigma(gray);
+        // The wavelet estimator only reacts to high-frequency noise, so clean
+        // digital pages are left untouched (like archive-pdf-tools).
+        double sigmaEstimate = NoiseEstimator.meanEstimateSigma(gray);
         if (sigmaEstimate > 1.0) {
-            gray = Cv.gaussianBlur(gray, Math.max(0.5, sigmaEstimate * 0.1));
+            gray = gray.gaussianFilter(sigmaEstimate * 0.1, 4);
         }
         Mask mask = Sauvola.thresholdImage(gray, sauvolaWindow(options.dpi),
                 options.sauvolaK, 128);

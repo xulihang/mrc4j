@@ -39,7 +39,7 @@ public final class ComponentDump {
 
         PixelBuffer img = ImageCodec.decode(Files.readAllBytes(in.toPath()));
         PixelBuffer gray = img.toGrayscale();
-        double sigma = NoiseEstimator.estimateSigma(gray);
+        double sigma = NoiseEstimator.meanEstimateSigma(gray);
         System.out.println("sigma_est " + sigma);
 
         MrcDecomposer.Options o = new MrcDecomposer.Options();

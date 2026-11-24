@@ -76,8 +76,9 @@ class OptimiserTest {
         // A pixel next to the ink receives a dark local average.
         assertTrue(foreground.get1(6, 9) < 200,
                 "near ink pixel was " + foreground.get1(6, 9));
-        // Far away the background fill is used.
-        assertTrue(foreground.get1(0, 0) > 200);
+        // Far away a flat ink colour is used (that area is hidden by the mask).
+        assertTrue(foreground.get1(0, 0) < 20,
+                "far ink pixel was " + foreground.get1(0, 0));
     }
 
     @Test

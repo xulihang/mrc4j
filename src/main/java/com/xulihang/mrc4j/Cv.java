@@ -133,16 +133,4 @@ final class Cv {
         dst.release();
         return out;
     }
-
-    /** Gaussian blur of a 1/3-channel buffer. */
-    static PixelBuffer gaussianBlur(PixelBuffer image, double sigma) {
-        load();
-        Mat src = rgbMat(image);
-        Mat dst = new Mat();
-        Imgproc.GaussianBlur(src, dst, new Size(0, 0), sigma);
-        PixelBuffer out = pixels(dst);
-        src.release();
-        dst.release();
-        return out;
-    }
 }

@@ -6,12 +6,13 @@ Java 11+ with OpenCV, package `com.xulihang.mrc4j`.
 Each image on each page of a PDF is split into three MRC layers, compressed,
 and put back where the original image was:
 
-* **mask** – 1-bit ink mask (Sauvola binarisation + connected-component
+* **mask** – 1-bit ink mask (Sauvola binarisation + 5x5 neighbourhood
   speckle filter)
 * **foreground** – ink pixels kept at full resolution, everything else
   filled with nearby ink colours (so it compresses well)
-* **background** – ink removed by local averaging, downsampled
-  (`--bg-downsample 3` by default)
+* **background** – ink removed by local averaging while every non-ink pixel
+  (including the anti-aliased glyph edges) is kept as scanned, then
+  downsampled (`--bg-downsample 3` by default)
 
 ## How it compares
 
@@ -100,8 +101,9 @@ mvn -DskipTests package
 Produces `target/mrc4j-1.0-SNAPSHOT.jar` (self-contained; PDFBox, JAI
 JPEG2000, jbig2 decoders and the OpenCV natives are shaded in). Maven 3.6+
 and JDK 11+ are required. The decomposition uses the OpenCV Java bindings
-(`org.openpnp:opencv`); their native libraries are bundled in the shaded jar
-and extracted on first use.
+(`org.openpnp:opencv`) for Sauvola binarisation, mask denoising and layer
+resampling; their native libraries are bundled in the shaded jar and
+extracted on first use.
 
 ### Thin jar for hosts with existing dependencies
 
@@ -219,9 +221,25 @@ Other entry points:
 ## Status
 
 Working: PDF parsing, image extraction/replacement, OpenCV-based MRC
-decomposition (Sauvola binarisation, foreground/background layer construction,
-mask denoising), background/foreground downsampling, JBIG2 / CCITT G4 /
-Kakadu / OpenJPEG / Grok / Java-JAI encoders, Flate fallbacks.
+decomposition (Sauvola binarisation, mask denoising, area resampling) and a
+linear-time port of the reference foreground/background fill,
+background/foreground downsampling, JBIG2 / CCITT G4 / Kakadu / OpenJPEG /
+Grok / Java-JAI encoders, Flate fallbacks.
+
+Fixed (2026-11-24):
+
+* Restored the reference wavelet noise estimator (the previous Laplacian
+  estimate always fired on text/artwork and blurred the page before
+  binarisation, shifting every mask edge).
+* The background layer no longer dilates the mask, so anti-aliased glyph and
+  line-art edges remain exactly as scanned instead of showing a light halo.
+* The foreground/background fill follows the reference "radiate" averaging
+  (masked-pixel window mean plus the already computed top-left quadrant),
+  computed incrementally in linear time. On the form and comic samples this
+  brings the rendered pages within 0.01-0.05 dB PSNR and ~0.1% file size of
+  the main branch, at the same speed.
+* Mask speckle removal uses the reference 5x5 neighbourhood rule instead of a
+  connected-component area cut-off.
 
 Fixed (2026-11-19):
 
