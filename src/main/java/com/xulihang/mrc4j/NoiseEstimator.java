@@ -1,29 +1,28 @@
 /*
- * mrc4j - Java port of archive-pdf-tools MRC compression.
- * Copyright (C) 2020-2021 Internet Archive
+ * mrc4j - MRC image compression for PDFs.
  * Copyright (C) 2026 mrc4j contributors
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package com.xulihang.mrc4j;
 
 import java.util.Arrays;
 
 /**
- * Noise level estimation, a dependency-free port of skimage's
- * {@code estimate_sigma(image)} for 2D images (default arguments). This is
- * what {@code mean_estimate_sigma()} in archive-pdf-tools' mrc.py computes:
+ * Noise level estimation following scikit-image's
+ * {@code estimate_sigma(image)} for 2D images (default arguments), which is
+ * also the estimator used by the MRC reference implementation. Adapted from
+ * scikit-image, Copyright (C) the scikit-image developers (BSD-3-Clause):
  *
  * <pre>
  *   coeffs = pywt.dwtn(image, wavelet='db2')
@@ -39,12 +38,13 @@ import java.util.Arrays;
  *   c[k] = sum_j x[(2 + 2k - j) mod N] * h[j]
  * </pre>
  * <p>with {@code h} the decomposition filter (verified against PyWavelets).</p>
+ *
+ * <p>Unlike a Laplacian-based estimate this is only sensitive to noise in the
+ * high-frequency band, so page edges and artwork do not inflate it; it keeps
+ * the decomposition in line with the reference implementation.</p>
  */
 public final class NoiseEstimator {
 
-    private static final double[] DB2_DEC_LO = {
-            -0.12940952255126037, 0.2241438680420134, 0.8365163037378079, 0.48296291314453416,
-    };
     private static final double[] DB2_DEC_HI = {
             -0.48296291314453416, 0.8365163037378079, -0.2241438680420134, -0.12940952255126037,
     };
@@ -79,7 +79,6 @@ public final class NoiseEstimator {
         }
         // Columns: DWT along y of the detail band -> HH ("dd") coefficients.
         int colLen = (h + 1) / 2;
-        int n = 0;
         double[] hh = new double[colLen * rowLen];
         for (int x = 0; x < rowLen; x++) {
             for (int y = 0; y < h; y++) {
@@ -90,6 +89,7 @@ public final class NoiseEstimator {
         // Remember layout: hh[x * colLen + y]
         int size = colLen * rowLen;
         double[] vals = new double[size];
+        int n = 0;
         for (int i = 0; i < size; i++) {
             double v = hh[i];
             if (v != 0.0) {

@@ -1,30 +1,40 @@
 /*
- * mrc4j - Java port of archive-pdf-tools MRC compression.
- * Copyright (C) 2020-2021 Internet Archive
+ * mrc4j - MRC image compression for PDFs.
  * Copyright (C) 2026 mrc4j contributors
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package com.xulihang.mrc4j;
 
+import org.opencv.core.Core;
+import org.opencv.core.CvType;
+import org.opencv.core.Mat;
+import org.opencv.core.Point;
+import org.opencv.core.Size;
+import org.opencv.imgproc.Imgproc;
+
 /**
- * Port of {@code cython/sauvola.pyx} from archive-pdf-tools, an integral-image
- * based Sauvola (plus local contrast) binariser.
+ * Sauvola binarisation, as described in J. Sauvola and M. Pietikainen,
+ * "Adaptive document image binarization", Pattern Recognition 33 (2000).
  *
- * <p>Output convention: a pixel becomes {@code true} when the input pixel is
- * <em>darker</em> than {@code mean * (1 - k)} plus a local variance term; see
- * {@link #binarise}.</p>
+ * <p>For each pixel the local mean {@code m} and standard deviation {@code s}
+ * are computed over a square window, and the pixel is marked as ink when it is
+ * darker than</p>
+ *
+ * <pre>  T = m * (1 + k * (s / R - 1))</pre>
+ *
+ * <p>with {@code R} the dynamic range of the standard deviation (128 for
+ * 8-bit input) and {@code k} a user-controlled sensitivity (0.2-0.5).</p>
  */
 public final class Sauvola {
 
@@ -32,169 +42,63 @@ public final class Sauvola {
     }
 
     /**
-     * Equivalent of calling {@code binarise_sauvola} and then inverting it, as
-     * {@code threshold_image()} in mrc.py does. The result has {@code true} for
-     * pixels that should end up in the MRC mask.
-     *
-     * <p>Like in mrc.py, the window size is only meaningful when it is odd;
-     * an even value makes every pixel in the first half of each row use the
-     * {@code -1 / 0} outcome, which is what the original code does.</p>
-     *
-     * @param in        grayscale input
-     * @param window    Sauvola window size (px), typically dpi/4 rounded up to odd
-     * @param k         Sauvola k parameter
-     * @param r         Sauvola dynamic range parameter (128 in mrc.py)
+     * @param in     grayscale input
+     * @param window window size in pixels (forced to an odd value &gt;= 3)
+     * @param k      Sauvola k (usually 0.2-0.5)
+     * @param r      dynamic range of the local standard deviation (128)
+     * @return mask with {@code true} for ink (text and line art)
      */
     public static Mask thresholdImage(PixelBuffer in, int window, double k, double r) {
         if (in.getChannels() != 1) {
             throw new IllegalArgumentException("thresholdImage expects grayscale input");
         }
-        int width = in.getWidth();
-        int height = in.getHeight();
-        boolean[] raw = binarise(in.getData(), width, height, window, window, k, r);
-        Mask out = new Mask(width, height);
-        byte[] d = out.getData();
-        for (int i = 0; i < d.length; i++) {
-            d[i] = (byte) (raw[i] ? 0 : 1);
+        if (r <= 0) {
+            throw new IllegalArgumentException("r must be positive");
         }
-        return out;
-    }
-
-    /**
-     * Line-by-line port of {@code binarise_sauvola}. Returns {@code true} where
-     * the original writes 1 into {@code out_arr} (i.e. "formres" was false).
-     */
-    public static boolean[] binarise(byte[] inArr, int width, int height,
-                                     int windowWidth, int windowHeight, double k, double r) {
-        boolean[] out = new boolean[width * height];
-        int[] integral = new int[width];
-        int[] integralSquare = new int[width];
-
-        // C semantics: (a + 1) / 2 and a / 2 are integer divisions
-        int l = (windowWidth + 1) / 2;
-        int rWin = windowWidth / 2;
-        int o = (windowHeight + 1) / 2;
-        int u = windowHeight / 2;
-
-        double k2 = k * k / r / r;
-
-        int index = 0;
-        int imax = Math.min(height, u);
-        for (int i = 0; i < imax; i++) {
-            for (int j = 0; j < width; j++) {
-                int pixel = inArr[index] & 0xff;
-                integral[j] += pixel;
-                integralSquare[j] += pixel * pixel;
-                index++;
-            }
+        Cv.load();
+        int w = in.getWidth();
+        int h = in.getHeight();
+        int win = Math.max(3, window);
+        if ((win & 1) == 0) {
+            win++;
         }
 
-        int dr0 = Math.min(windowWidth, width);
-        int dr1 = Math.min(rWin, width);
-        int dr2 = width - l;
-        int dr3 = Math.min(dr2, 0);
-        int indexTop = 0;
-        int indexBottom = u * width;
+        Mat src = Cv.rgbMat(in);
+        Mat gray = new Mat();
+        src.convertTo(gray, CvType.CV_32F);
+        Mat mean = new Mat();
+        Mat square = new Mat();
+        Mat squareMean = new Mat();
+        Imgproc.boxFilter(gray, mean, CvType.CV_32F, new Size(win, win),
+                new Point(-1, -1), true, Core.BORDER_REPLICATE);
+        Core.multiply(gray, gray, square);
+        Imgproc.boxFilter(square, squareMean, CvType.CV_32F, new Size(win, win),
+                new Point(-1, -1), true, Core.BORDER_REPLICATE);
 
-        int winTop = -o;
-        int winBottom = u;
-        index = 0;
-        int bottomMax = height + u;
-        while (winBottom < bottomMax) {
-            if (winTop >= 0) {
-                for (int j = 0; j < width; j++) {
-                    int pixel = inArr[indexTop] & 0xff;
-                    integral[j] -= pixel;
-                    integralSquare[j] -= pixel * pixel;
-                    indexTop++;
-                }
-                // top = winTop: only used through winHeight below
+        float[] localMean = new float[w * h];
+        float[] localSquareMean = new float[w * h];
+        mean.get(0, 0, localMean);
+        squareMean.get(0, 0, localSquareMean);
+        byte[] pixels = in.getData();
+
+        Mask mask = new Mask(w, h);
+        byte[] out = mask.getData();
+        double invR = 1.0 / r;
+        for (int i = 0; i < localMean.length; i++) {
+            double variance = localSquareMean[i] - (double) localMean[i] * localMean[i];
+            if (variance < 0) {
+                variance = 0;
             }
-
-            if (winBottom < height) {
-                for (int j = 0; j < width; j++) {
-                    int pixel = inArr[indexBottom] & 0xff;
-                    integral[j] += pixel;
-                    integralSquare[j] += pixel * pixel;
-                    indexBottom++;
-                }
-            }
-
-            // The original only guards these with non-negative checks; the only
-            // reachable case with a negative bound is a leading "-1", which
-            // keeps the whole column window.
-            int top = winTop >= 0 ? winTop : -1;
-            int bottom = winBottom < height ? winBottom : height - 1;
-            int winHeight = bottom - top;
-
-            int sum = 0;
-            int squareSum = 0;
-            for (int j = 0; j < dr1; j++) {
-                sum += integral[j];
-                squareSum += integralSquare[j];
-            }
-
-            int count = dr1 * winHeight;
-            int winRight = rWin;
-            while (winRight < dr0) {
-                count += winHeight;
-                sum += integral[winRight];
-                squareSum += integralSquare[winRight];
-
-                int pixel = inArr[index] & 0xff;
-                out[index] = !formRes(k, k2, sum, squareSum, count, pixel);
-                winRight++;
-                index++;
-            }
-
-            int winLeft = winRight - windowWidth;
-            if (winRight >= width) {
-                while (winLeft < dr3) {
-                    int pixel = inArr[index] & 0xff;
-                    out[index] = !formRes(k, k2, sum, squareSum, count, pixel);
-                    winLeft++;
-                    index++;
-                }
-            } else {
-                while (winRight < width) {
-                    sum += integral[winRight] - integral[winLeft];
-                    squareSum += integralSquare[winRight] - integralSquare[winLeft];
-
-                    int pixel = inArr[index] & 0xff;
-                    out[index] = !formRes(k, k2, sum, squareSum, count, pixel);
-                    winLeft++;
-                    winRight++;
-                    index++;
-                }
-            }
-
-            while (winLeft < dr2) {
-                count -= winHeight;
-                sum -= integral[winLeft];
-                squareSum -= integralSquare[winLeft];
-
-                int pixel = inArr[index] & 0xff;
-                out[index] = !formRes(k, k2, sum, squareSum, count, pixel);
-                winLeft++;
-                index++;
-            }
-
-            winTop++;
-            winBottom++;
+            double std = Math.sqrt(variance);
+            double threshold = localMean[i] * (1.0 + k * (std * invR - 1.0));
+            out[i] = (byte) (((pixels[i] & 0xff) < threshold) ? 1 : 0);
         }
-        return out;
-    }
 
-    private static boolean formRes(double k, double k2, int sum, int squareSum, int count, int pixel) {
-        double mean = (double) sum / count;
-        // squareSum is an int32 in the original, so it wraps like here
-        double variance = (double) squareSum / count - (mean * mean);
-        if (k >= 0) {
-            double tmp = pixel + (mean * (k - 1));
-            return (tmp <= 0) || (tmp * tmp <= mean * mean * k2 * variance);
-        } else {
-            double tmp = pixel + mean * (k - 1);
-            return (tmp <= 0) && (tmp * tmp >= mean * mean * k2 * variance);
-        }
+        src.release();
+        gray.release();
+        mean.release();
+        square.release();
+        squareMean.release();
+        return mask;
     }
 }

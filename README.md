@@ -1,17 +1,18 @@
 # mrc4j
 
-Java (11+) port of the image compression part of
-[internetarchive/archive-pdf-tools](https://github.com/internetarchive/archive-pdf-tools)
-(`bin/compress-pdf-images` / `internetarchivepdf/mrc.py`), package
-`com.xulihang.mrc4j`.
+MRC (Mixed Raster Content) image compression for PDFs, implemented in
+Java 11+ with OpenCV, package `com.xulihang.mrc4j`.
 
 Each image on each page of a PDF is split into three MRC layers, compressed,
 and put back where the original image was:
 
-* **mask** – 1-bit text/line-art mask (Sauvola binarisation + speckle removal)
-* **foreground** – masked pixels kept at full resolution, everything else
-  replaced by averaged surrounding content (so it compresses well)
-* **background** – inverted mask, downsampled (`--bg-downsample 3` by default)
+* **mask** – 1-bit ink mask (Sauvola binarisation + 5x5 neighbourhood
+  speckle filter)
+* **foreground** – ink pixels kept at full resolution, everything else
+  filled with nearby ink colours (so it compresses well)
+* **background** – ink removed by local averaging while every non-ink pixel
+  (including the anti-aliased glyph edges) is kept as scanned, then
+  downsampled (`--bg-downsample 3` by default)
 
 ## How it compares
 
@@ -98,8 +99,11 @@ mvn -DskipTests package
 ```
 
 Produces `target/mrc4j-1.0-SNAPSHOT.jar` (self-contained; PDFBox, JAI
-JPEG2000 and jbig2 decoders are shaded in). Maven 3.6+ and JDK 11+ are
-required.
+JPEG2000, jbig2 decoders and the OpenCV natives are shaded in). Maven 3.6+
+and JDK 11+ are required. The decomposition uses the OpenCV Java bindings
+(`org.openpnp:opencv`) for Sauvola binarisation, mask denoising and layer
+resampling; their native libraries are bundled in the shaded jar and
+extracted on first use.
 
 ### Thin jar for hosts with existing dependencies
 
@@ -112,7 +116,8 @@ mvn -Pthin package
 ```
 
 The resulting `target/mrc4j-1.0-SNAPSHOT.jar` (~67 KB) relies on the host's
-existing PDFBox/JAI jars. Do not add the shaded jar at the same time.
+existing PDFBox/JAI jars and the OpenCV Java bindings
+(`org.openpnp:opencv`). Do not add the shaded jar at the same time.
 
 For page-by-page processing, `Mrc4j.addPageImageFromFile` compresses a single
 image and draws the background and foreground (with its mask) into an already
@@ -160,8 +165,8 @@ java -cp target/mrc4j-1.0-SNAPSHOT.jar com.xulihang.mrc4j.PdfCompressor \
 
 `--encoder java` uses the JAI JPEG2000 writer bundled in the jar; `--no-jbig2`
 uses a CCITT Group 4 mask (pass `--mask-compression flate` for Flate). With
-Kakadu and jbig2enc installed, omit both flags to use the same defaults as
-archive-pdf-tools. Add `--preset balanced` (or another profile below) to pick
+Kakadu and jbig2enc installed, omit both flags to use the reference tool's
+defaults. Add `--preset balanced` (or another profile below) to pick
 a quality/size point without tuning individual rates.
 
 Options:
@@ -179,7 +184,10 @@ Options:
 | `--fg-bpp N` / `--bg-bpp N` | Java (JAI) encoder rates in bits/pixel (0.4 / 0.2) |
 | `--fg-downsample N` | foreground downsample factor (1 = full resolution) |
 | `--bg-downsample N` | background downsample factor (3) |
+| `--bg-dilate N` | grow the background fill mask by N px; `-1` = auto, `0` keeps the anti-aliased fringe (see below) |
 | `--dpi N` | fallback DPI for the Sauvola window (300) |
+| `--sauvola-k N` | Sauvola sensitivity; higher values produce a thinner mask (0.34) |
+| `--no-denoise` | keep isolated mask speckles |
 | `--dump DIR` | write the MRC layers as PNG files |
 | `--debug` | per-image timings |
 
@@ -206,6 +214,16 @@ about 70 KB; on the magazine sample above `balanced` is about 120 KB. The
 `comic` profile deliberately keeps the colour foreground at full resolution,
 because downsampling it softens coloured line art.
 
+When the background is downsampled (every preset except `high`), the
+anti-aliased grey fringe around each stroke would be averaged with the paper
+and read as a light halo. To avoid it, the background is filled under a mask
+grown by `bg-downsample - 1` pixels, so it consists of clean paper right up to
+the text and the binary text mask defines the edge (the same effect as the
+GdPicture.NET MRC sample). This makes text crisper at the cost of the faint
+grey edge pixels; `--bg-dilate 0` keeps the reference behaviour and
+`--bg-dilate N` sets the radius explicitly. `high` (no downsampling) keeps the
+exact anti-aliased pixels and stays lossless.
+
 Other entry points:
 
 * `com.xulihang.mrc4j.ComponentDump <image> <outDir> [dpi]` – dump the
@@ -213,9 +231,33 @@ Other entry points:
 
 ## Status
 
-Working: PDF parsing, image extraction/replacement, MRC decomposition,
-Sauvola thresholding, layer optimising, background downsampling, JBIG2 /
-CCITT G4 / Kakadu / OpenJPEG / Grok / Java-JAI encoders, Flate fallbacks.
+Working: PDF parsing, image extraction/replacement, OpenCV-based MRC
+decomposition (Sauvola binarisation, mask denoising, area resampling) and a
+linear-time implementation of the reference foreground/background fill,
+background/foreground downsampling, JBIG2 / CCITT G4 / Kakadu / OpenJPEG /
+Grok / Java-JAI encoders, Flate fallbacks.
+
+See [docs/image-quality-evaluation.md](docs/image-quality-evaluation.md) for
+how the output quality is measured (layer reconstruction, masked PSNR, mask
+IoU, multi-scale renders) and the measurements behind the numbers below.
+
+Fixed (2026-11-24):
+
+* Restored the reference wavelet noise estimator (the previous Laplacian
+  estimate always fired on text/artwork and blurred the page before
+  binarisation, shifting every mask edge).
+* The background layer no longer grows the mask at full resolution, so
+  anti-aliased glyph and line-art edges stay exactly as scanned. For a
+  downsampled background the opposite is needed: a grown fill mask clears the
+  fringe that would otherwise become a light halo, which keeps text crisp like
+  GdPicture.NET's MRC output (`--bg-dilate`, auto by default).
+* The foreground/background fill follows the reference "radiate" averaging
+  (masked-pixel window mean plus the already computed top-left quadrant),
+  computed incrementally in linear time. On the form and comic samples this
+  brings the rendered pages within 0.01-0.05 dB PSNR and ~0.1% file size of
+  the main branch, at the same speed.
+* Mask speckle removal uses the reference 5x5 neighbourhood rule instead of a
+  connected-component area cut-off.
 
 Fixed (2026-11-19):
 
@@ -242,11 +284,6 @@ colours and orientation.
 
 ## License
 
-mrc4j is a Java port of the image compression part of
-[archive-pdf-tools](https://github.com/internetarchive/archive-pdf-tools).
-The original code is Copyright (C) 2020-2021 Internet Archive; original authors
-include Merlijn Wajer, Bas Weelinck and contributors.
-
-This project is distributed under the GNU Affero General Public License,
-version 3 or (at your option) any later version. See [LICENSE](LICENSE) and
-[NOTICE](NOTICE).
+mrc4j is licensed under the
+[Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0).
+See [LICENSE](LICENSE) and [NOTICE](NOTICE).

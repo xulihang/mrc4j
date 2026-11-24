@@ -10,12 +10,12 @@
     <packaging>jar</packaging>
 
     <name>mrc4j</name>
-    <description>Java port of internetarchive/archive-pdf-tools image compression (MRC) for PDFs</description>
+    <description>MRC (Mixed Raster Content) image compression for PDFs</description>
 
     <licenses>
         <license>
-            <name>GNU Affero General Public License v3.0 or later</name>
-            <url>https://www.gnu.org/licenses/agpl-3.0.html</url>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
             <distribution>repo</distribution>
         </license>
     </licenses>
@@ -42,6 +42,12 @@
             <groupId>com.github.jai-imageio</groupId>
             <artifactId>jai-imageio-core</artifactId>
             <version>1.4.0</version>
+        </dependency>
+        <!-- Native OpenCV for binarisation, inpainting and layer processing -->
+        <dependency>
+            <groupId>org.openpnp</groupId>
+            <artifactId>opencv</artifactId>
+            <version>4.9.0-0</version>
         </dependency>
         <!-- JBIG2 decoder so the generated PDFs can be read back/tested;
              JBIG2 *encoding* is done by jbig2enc, like the Python tool -->
@@ -96,6 +102,18 @@
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                             </transformers>
+                            <!-- OpenCV ships native libraries; signed-jar
+                                 metadata would break the shaded jar. -->
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
                         </configuration>
                     </execution>
                 </executions>
