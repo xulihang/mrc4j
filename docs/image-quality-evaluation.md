@@ -231,3 +231,24 @@ comp[m] = fg[m]          # 无损分解时应与原图逐像素一致
 
 说明：以上指标使用内置 JAI JPEG2000 + G4 mask；换成 Kakadu/OpenJPEG/JBIG2 时绝对数值会
 变化，但同一编码器下的相对比较和优化结论不变。
+
+## 五、内置 JBIG2 mask（2026-11-25）
+
+`com.xulihang.mrc4j.jbig2` 是 jbig2enc generic-region 编码器的纯 Java 移植
+（无损），现为默认掩膜编码器，不再需要外部 `jbig2`。对 `--dump` 导出的两个
+真实掩膜，用同一 G4 参数（CCITTFaxDecode，K=-1）作对照：
+
+| 掩膜 | 尺寸 | G4 | 内置 JBIG2 | 比例 |
+| --- | --- | --- | --- | --- |
+| `out/tmpdump-comic-base/mrc0-mask.png` | 1919×2950 | 108,500 B | 86,832 B | 80% |
+| `out/tmpdump-gdp-base/mrc0-mask.png` | 2480×3508 | 49,907 B | 37,833 B | 76% |
+
+往返解码（jbig2-imageio）逐像素一致；`Jbig2RoundTripTest` 覆盖 1×1 到
+320×240 的随机/实心/棋盘图以及上述真实掩膜，`Jbig2GoldenTest` 对照
+jbig2enc `tests/byte_regression.cc` 的逐字节参考向量。
+
+注意：JBIG2 的前景位 1 在 PDF DeviceGray 中解码为 0（黑），而 SMask 需要
+墨迹为白色（不透明），因此 JBIG2 SMask 必须带 `/Decode [1 0]`
+（`MrcImages` 已设置）。缺少它时 jbig2 掩膜会反相；GdPicture 样本同样使用
+该 Decode 数组。`Jbig2MaskTest` 通过实际渲染页面验证这一点。
+

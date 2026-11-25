@@ -50,7 +50,7 @@
             <version>4.9.0-0</version>
         </dependency>
         <!-- JBIG2 decoder so the generated PDFs can be read back/tested;
-             JBIG2 *encoding* is done by jbig2enc, like the Python tool -->
+             JBIG2 *encoding* is built in (com.xulihang.mrc4j.jbig2) -->
         <dependency>
             <groupId>org.apache.pdfbox</groupId>
             <artifactId>jbig2-imageio</artifactId>

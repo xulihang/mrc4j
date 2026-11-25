@@ -145,7 +145,7 @@ public final class Mrc4j {
         return bytes;
     }
 
-    /** Compress a PDF in place using JAI JPEG 2000, a G4 mask and 0.4/0.2 bpp. */
+    /** Compress a PDF in place using JAI JPEG 2000, a built-in JBIG2 mask and 0.4/0.2 bpp. */
     public static void compressInPlace(String pdfPath) throws IOException {
         compressInPlace(pdfPath, 0.4, 0.2, 3);
     }    /** Compress a PDF in place. */
@@ -183,7 +183,6 @@ public final class Mrc4j {
                                                  double bgBitsPerPixel,
                                                  int bgDownsample) {
         PdfCompressor.Options options = new PdfCompressor.Options();
-        options.useJbig2 = false;
         options.maskFallback = PdfCompressor.MaskFallback.G4;
         options.jpeg2000.encoder = PdfCompressor.Jpeg2000Options.Encoder.JAVA;
         options.jpeg2000.fgBitsPerPixel = fgBitsPerPixel;

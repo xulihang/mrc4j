@@ -21,12 +21,18 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import com.xulihang.mrc4j.jbig2.Jbig2GenericEncoder;
+
 /**
- * MRC mask encoding, mirroring {@code encode_mrc_mask()} in mrc.py: the mask is
- * written as a 1-bit PNG and piped through {@code jbig2enc}'s {@code jbig2}
- * tool: the embedded-mode JBIG2 stream produced by {@code jbig2 -p} is put in
- * a {@code /JBIG2Decode} image stream, exactly like
- * {@code page.insert_image(mask=...)} ends up doing with PyMuPDF.
+ * Encodes an MRC mask as a PDF-ready JBIG2 stream.
+ *
+ * <p>The default is the built-in pure-Java encoder
+ * ({@link Jbig2GenericEncoder}), which is lossless and needs no external
+ * program. Passing an external {@code jbig2} (jbig2enc) binary uses that
+ * tool instead — useful for byte-level comparison — with the built-in
+ * encoder as a fallback. The embedded-mode stream produced either way goes
+ * into a {@code /JBIG2Decode} image stream, exactly like the reference
+ * tool's {@code jbig2 -p} output.</p>
  */
 public final class Jbig2Encoder {
 
@@ -46,61 +52,79 @@ public final class Jbig2Encoder {
     private Jbig2Encoder() {
     }
 
+    /**
+     * @param tool external jbig2 binary name/path, or {@code null} for the
+     *             built-in encoder
+     */
     public static boolean isAvailable(String tool) {
-        return Jpeg2000Encoder.executable(tool) != null;
+        return tool == null || Jpeg2000Encoder.executable(tool) != null;
     }
 
     /**
-     * @param tool     jbig2 binary name/path
-     * @param dumpDir  optional directory to keep the PNG/JBIG2 files in
-     * @return encoded mask, or {@code null} when no jbig2 tool is available
+     * @param tool    external jbig2 binary name/path, or {@code null} to use
+     *                the built-in encoder
+     * @param dumpDir optional directory to keep the encoded {@code .jbig2}
+     *                stream in
+     * @return encoded mask, or {@code null} when no encoder succeeded
      */
     static Result encode(Mask mask, String tool, File dumpDir, String name) throws IOException {
-        String exe = Jpeg2000Encoder.executable(tool);
-        Path dir;
-        boolean temp = dumpDir == null;
-        if (dumpDir != null) {
-            Files.createDirectories(dumpDir.toPath());
-            dir = Files.createTempDirectory(dumpDir.toPath(), "mask-");
-        } else {
-            dir = Files.createTempDirectory("mrc4j-mask");
-        }
-        try {
-            File png = dir.resolve("mask.png").toFile();
-            Files.write(png.toPath(), Png1Bit.encode(mask));
-            if (exe == null) {
-                if (dumpDir != null) {
-                    System.out.println("  jbig2 tool not found, wrote mask PNG " + png);
-                }
-                return null;
+        if (tool != null) {
+            Result external = encodeExternal(mask, tool, name);
+            if (external != null) {
+                dump(dumpDir, name, external.data());
+                return external;
             }
+            System.err.println("warning: external jbig2 '" + tool + "' unavailable or failed for "
+                    + name + ", using the built-in encoder");
+        }
+
+        try {
+            byte[] data = Jbig2GenericEncoder.encodeEmbedded(mask);
+            dump(dumpDir, name, data);
+            return new Result(data);
+        } catch (RuntimeException e) {
+            System.err.println("warning: built-in JBIG2 encoder failed for " + name + ": " + e);
+            return null;
+        }
+    }
+
+    private static Result encodeExternal(Mask mask, String tool, String name) throws IOException {
+        String exe = Jpeg2000Encoder.executable(tool);
+        if (exe == null) {
+            return null;
+        }
+        Path png = Files.createTempFile("mrc4j-mask-", ".png");
+        try {
+            Files.write(png, Png1Bit.encode(mask));
             // -p makes jbig2enc emit the page stream with an embedded global
             // segment. Its output is the embedded-mode-only format, which is
             // what the reference tool embeds as a /JBIG2Decode stream as well.
-            Process p = new ProcessBuilder(exe, "-p", png.getAbsolutePath())
-                    .redirectErrorStream(true).start();
+            Process p = new ProcessBuilder(exe, "-p", png.toString())
+                    .redirectError(ProcessBuilder.Redirect.INHERIT)
+                    .start();
             byte[] output;
             try (var is = p.getInputStream()) {
                 output = is.readAllBytes();
             }
             if (p.waitFor() != 0 || output.length == 0) {
-                System.err.println("warning: jbig2 failed for " + name + ", mask will be written as PNG");
                 return null;
-            }
-            if (dumpDir != null) {
-                File jb = dir.resolve("mask.jbig2").toFile();
-                Files.write(jb.toPath(), output);
-                System.out.println("  wrote " + png + " and " + jb);
             }
             return new Result(output);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IOException(e);
         } finally {
-            // temp dirs are cleaned by the OS when dumpDir is null; keep dumps
-            if (temp) {
-                Jpeg2000Encoder.deleteRecursively(dir);
-            }
+            Files.deleteIfExists(png);
         }
+    }
+
+    private static void dump(File dumpDir, String name, byte[] data) throws IOException {
+        if (dumpDir == null) {
+            return;
+        }
+        Files.createDirectories(dumpDir.toPath());
+        Path jb = dumpDir.toPath().resolve(name + "-mask.jbig2");
+        Files.write(jb, data);
+        System.out.println("  wrote " + jb);
     }
 }

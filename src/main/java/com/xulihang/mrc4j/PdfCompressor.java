@@ -41,8 +41,8 @@ import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
  *   java -jar mrc4j.jar input.pdf output.pdf [options]
  *
  *   --kdu PATH          kdu_compress binary (default: from PATH)
- *   --jbig2 PATH        jbig2 binary (default: from PATH)
- *   --no-jbig2          do not use jbig2enc; masks use --mask-compression
+ *   --jbig2 PATH        use this external jbig2 (jbig2enc) binary for masks
+ *   --no-jbig2          do not use JBIG2; masks use --mask-compression
  *   --mask-compression  g4 | flate | jbig2 (fallback G4)
  *   --fg-slope N        Kakadu foreground slope (default 44500)
  *   --bg-slope N        Kakadu background slope (default 44250)
@@ -87,7 +87,12 @@ public final class PdfCompressor {
 
     /** Compression configuration. */
     public static final class Options {
-        public String jbig2Command = "jbig2";
+        /**
+         * External jbig2 (jbig2enc) binary, or {@code null} (default) to use
+         * the built-in pure-Java JBIG2 encoder.
+         */
+        public String jbig2Command = null;
+        /** Encode the mask with JBIG2 (built-in, or {@link #jbig2Command}). */
         public boolean useJbig2 = true;
         /** Codec for the mask when JBIG2 is unavailable/disabled. */
         public MaskFallback maskFallback = MaskFallback.G4;

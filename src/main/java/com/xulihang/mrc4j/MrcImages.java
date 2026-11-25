@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 
+import org.apache.pdfbox.cos.COSArray;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSInteger;
 import org.apache.pdfbox.cos.COSName;
@@ -39,8 +40,8 @@ import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
  * Builds the PDF image objects for the MRC layers.
  *
  * <p>JPEG2000 data is embedded as raw {@code /JPXDecode} streams. The mask
- * is embedded as a 1-bit {@code /SMask}: JBIG2 ({@code jbig2 -p} output)
- * when jbig2enc is available, otherwise as CCITT Group 4.</p>
+ * is embedded as a 1-bit {@code /SMask}: JBIG2 (built in, or external
+ * jbig2enc output when selected) when available, otherwise as CCITT Group 4.</p>
  */
 final class MrcImages {
 
@@ -129,6 +130,14 @@ final class MrcImages {
         mask.getCOSObject().setItem(COSName.COLORSPACE, PDDeviceGray.INSTANCE);
         if (r.maskJbig2() != null) {
             mask.getCOSObject().setItem(COSName.FILTER, COSName.JBIG2_DECODE);
+            // JBIG2 bit 1 is the foreground (ink) mark and decodes to sample 0
+            // in PDF's DeviceGray convention. The mask marks ink, and as an
+            // SMask that must be white (opaque), so invert the samples. This
+            // matches the /Decode [1 0] the GdPicture MRC sample uses.
+            COSArray decode = new COSArray();
+            decode.add(COSInteger.ONE);
+            decode.add(COSInteger.ZERO);
+            mask.getCOSObject().setItem(COSName.DECODE, decode);
             write(mask, r.maskJbig2());
         } else if (r.mask() != null
                 && r.maskFallback() == PdfCompressor.MaskFallback.G4) {

@@ -4,3 +4,7 @@ Copyright (C) 2026 mrc4j contributors
 
 Licensed under the Apache License, Version 2.0.
 See the LICENSE file for the full text.
+
+This product includes a Java port of the JBIG2 encoder from jbig2enc
+(https://github.com/agl/jbig2enc), Copyright 2006 Google Inc.,
+licensed under the Apache License, Version 2.0.

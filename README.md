@@ -22,7 +22,7 @@ and put back where the original image was:
 | Baseline JPEG (lower quality) | All pixels in one DCT layer | Simple, universally supported | At small sizes thin strokes blur and ringing/block artefacts appear around text; the same setting degrades text, paper and photos together |
 | JPEG 2000 | All pixels in one wavelet layer | Better low-rate behaviour than JPEG, progressive | Still one layer: text and background compete for the same bits |
 | CCITT G4 / TIFF G4 | 1-bit pixels | Lossless for pure black-and-white text, fast | No grey or colour |
-| JBIG2 (ITU T.88) | 1-bit pixels + symbol dictionary | The most compact bilevel coding, often 1.5–3x smaller than G4 on text | Bilevel only; needs jbig2enc to encode |
+| JBIG2 (ITU T.88) | 1-bit pixels (generic region; symbol dictionary in symbol mode) | The most compact bilevel coding, often 1.5–3x smaller than G4 on text | Bilevel only; symbol mode needs an external encoder |
 | DjVu | JB2 text layer + IW44 colour layers | Very small for scans, multi-resolution | Separate container format, not PDF |
 | MRC (this project) | 1-bit mask + colour foreground + downsampled background | Text stays sharp while colour is compressed independently | A full-page colour foreground costs bytes on photo-heavy pages |
 
@@ -88,9 +88,11 @@ There is no single setting that fits every page:
   text layer (as added by ImageTrans) is needed for search and copy. Its
   embedded font can be a significant part of the final file size.
 
-Once the colour layers are small, the mask becomes the next bottleneck;
-installing jbig2enc replaces the G4 fallback with JBIG2 and typically saves
-another 20–40% on the mask.
+Once the colour layers are small, the mask becomes the next bottleneck.
+mrc4j encodes it with a built-in, lossless JBIG2 generic-region encoder (a
+pure-Java port of jbig2enc's encoder), which typically saves 20–40% over the
+G4 fallback. Pass `--jbig2 PATH` to use an external jbig2enc binary instead;
+it is never required.
 
 ## Build
 
@@ -99,11 +101,12 @@ mvn -DskipTests package
 ```
 
 Produces `target/mrc4j-1.0-SNAPSHOT.jar` (self-contained; PDFBox, JAI
-JPEG2000, jbig2 decoders and the OpenCV natives are shaded in). Maven 3.6+
-and JDK 11+ are required. The decomposition uses the OpenCV Java bindings
-(`org.openpnp:opencv`) for Sauvola binarisation, mask denoising and layer
-resampling; their native libraries are bundled in the shaded jar and
-extracted on first use.
+JPEG2000, jbig2 decoders, the built-in JBIG2 encoder and the OpenCV natives
+are shaded in). Maven 3.6+ and JDK 11+ are required. The decomposition uses the
+OpenCV Java bindings (`org.openpnp:opencv`) for Sauvola binarisation, mask
+denoising and layer resampling; their native libraries are bundled in the
+shaded jar and extracted on first use. The JBIG2 mask encoder is pure Java and
+needs no external binary.
 
 ### Thin jar for hosts with existing dependencies
 
@@ -137,9 +140,9 @@ long layerBytes = Mrc4j.addPageImageFromFile(doc, contentStream, imagePath,
 
 It returns the encoded layer bytes so the caller can update progress after
 each image. The overload with explicit rates takes
-`fgBpp, bgBpp, bgDownsample`. It uses the built-in JAI encoder and a G4 mask
-and needs no external `kdu_compress` / `jbig2` executable. Text drawn into the
-content stream afterwards stays on top.
+`fgBpp, bgBpp, bgDownsample`. It uses the built-in JAI encoder and the built-in
+JBIG2 mask encoder and needs no external `kdu_compress` / `jbig2`
+executable. Text drawn into the content stream afterwards stays on top.
 
 For an already loaded PDF, `Mrc4j.compressPage(doc, pageIndex)` compresses the
 page-level images in place. Each image draw is replaced at its original
@@ -167,14 +170,16 @@ The quickest self-contained run (no external encoders):
 
 ```
 java -cp target/mrc4j-1.0-SNAPSHOT.jar com.xulihang.mrc4j.PdfCompressor \
-    in.pdf out.pdf --encoder java --no-jbig2
+    in.pdf out.pdf --encoder java
 ```
 
-`--encoder java` uses the JAI JPEG2000 writer bundled in the jar; `--no-jbig2`
-uses a CCITT Group 4 mask (pass `--mask-compression flate` for Flate). With
-Kakadu and jbig2enc installed, omit both flags to use the reference tool's
-defaults. Add `--preset balanced` (or another profile below) to pick
-a quality/size point without tuning individual rates.
+`--encoder java` uses the JAI JPEG2000 writer and the built-in lossless JBIG2
+mask encoder, both bundled in the jar. `--no-jbig2` switches the mask to
+CCITT Group 4 (pass `--mask-compression flate` for Flate) instead, and
+`--jbig2 PATH` uses an external jbig2enc binary rather than the built-in
+encoder. With Kakadu/OpenJPEG installed, omit `--encoder java` to use the
+reference tool's JPEG2000 defaults. Add `--preset balanced` (or another
+profile below) to pick a quality/size point without tuning individual rates.
 
 Options:
 
@@ -183,9 +188,9 @@ Options:
 | `--encoder kakadu\|openjpeg\|grok\|java\|none` | JPEG2000 encoder; `java` is built in |
 | `--preset high\|balanced\|small\|comic\|photo` | quality/size profile for the Java pipeline (see below) |
 | `--kdu PATH` | `kdu_compress` binary (Kakadu); default: `kdu_compress` from PATH |
-| `--jbig2 PATH` | `jbig2` (jbig2enc) binary; default: `jbig2` from PATH |
-| `--no-jbig2` | don't use jbig2enc; use the mask fallback |
-| `--mask-compression g4\|flate\|jbig2` | mask codec when JBIG2 is unavailable (default `g4`) |
+| `--jbig2 PATH` | use this external `jbig2` (jbig2enc) binary instead of the built-in encoder |
+| `--no-jbig2` | don't use JBIG2; use the mask fallback |
+| `--mask-compression g4\|flate\|jbig2` | mask codec when JBIG2 is disabled (default `g4`) |
 | `--fg-slope N` / `--bg-slope N` | Kakadu slope values (44500 / 44250) |
 | `--fg-rates R` / `--bg-rates R` | OpenJPEG/Grok compression ratios (750 / 500) |
 | `--fg-bpp N` / `--bg-bpp N` | Java (JAI) encoder rates in bits/pixel (0.4 / 0.2) |
@@ -241,12 +246,29 @@ Other entry points:
 Working: PDF parsing, image extraction/replacement, OpenCV-based MRC
 decomposition (Sauvola binarisation, mask denoising, area resampling) and a
 linear-time implementation of the reference foreground/background fill,
-background/foreground downsampling, JBIG2 / CCITT G4 / Kakadu / OpenJPEG /
-Grok / Java-JAI encoders, Flate fallbacks.
+background/foreground downsampling, built-in pure-Java JBIG2, CCITT G4,
+Kakadu / OpenJPEG / Grok / Java-JAI encoders, Flate fallbacks.
 
 See [docs/image-quality-evaluation.md](docs/image-quality-evaluation.md) for
 how the output quality is measured (layer reconstruction, masked PSNR, mask
 IoU, multi-scale renders) and the measurements behind the numbers below.
+
+Fixed (2026-11-25):
+
+* Added `com.xulihang.mrc4j.jbig2`, a pure-Java port of jbig2enc's lossless
+  generic-region encoder. Its embedded-mode output mirrors `jbig2 -p`
+  (byte-identical on jbig2enc's published regression vector; run
+  `Jbig2ExternalDifferentialTest` with `-Djbig2.bin=<path>` to compare against
+  an installed binary). It is now the default mask codec; `--jbig2 PATH`
+  selects an external jbig2enc binary instead (with the built-in encoder as
+  fallback).
+* Fixed the JBIG2 mask polarity: the `/SMask` now carries `/Decode [1 0]`, so
+  mask ink renders opaque. Without it, an external `jbig2` mask decoded
+  inverted (ink transparent), like the GdPicture sample that uses the same
+  Decode array. Covered by `Jbig2MaskTest`, which renders the page.
+* Measured on the dumped masks, the built-in JBIG2 encoder produces 80% of the
+  G4 size for the comic mask (1919x2950: 86,832 vs 108,500 bytes) and 76% for
+  the form mask (2480x3508: 37,833 vs 49,907 bytes).
 
 Fixed (2026-11-24):
 
@@ -284,7 +306,8 @@ Fixed (2026-11-19):
   jbig2enc is unavailable.
 
 In the page-6 test fixture used during the port (8.4 MB), the default
-self-contained result is about **0.41 MB** with `--encoder java --no-jbig2`;
+self-contained result is about **0.41 MB** with `--encoder java` (G4 mask:
+add `--no-jbig2`);
 `--fg-bpp 0.25 --bg-bpp 0.1` brings it to about **0.29 MB** with slightly
 softer artwork. The text/line art stays crisp and the page keeps its original
 colours and orientation.
